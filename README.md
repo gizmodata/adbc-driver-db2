@@ -154,8 +154,8 @@ with db2.connect(uri=uri, username=user, password=pw, autocommit=True) as conn, 
 ### Query Db2 live from DuckDB or GizmoSQL (`adbc_scanner`)
 
 The c-shared driver plugs straight into DuckDB's
-[`adbc_scanner`](https://docs.gizmosql.com/adbc_scanner_duckdb/) community
-extension — and therefore into [GizmoSQL](https://gizmodata.com/gizmosql),
+[`adbc_scanner`](https://github.com/Query-farm/adbc_scanner) community
+extension (see the [GizmoSQL guide](https://docs.gizmosql.com/adbc_scanner_duckdb/)) — and therefore into [GizmoSQL](https://gizmodata.com/gizmosql),
 which embeds DuckDB. Store the credentials in a DuckDB secret once, then
 `ATTACH` Db2 like any other database and query it with plain SQL
 (projection and filter pushdown included):
@@ -198,7 +198,8 @@ SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SYSCAT.TABLES
 ### Query Db2 from DuckDB via connection profiles (Columnar's `adbc` extension)
 
 Columnar's [`adbc`](https://github.com/columnar-tech/duckdb-adbc-client)
-community extension resolves databases through ADBC
+community extension (see the [GizmoSQL guide](https://docs.gizmosql.com/adbc_duckdb_extension/))
+resolves databases through ADBC
 [connection profiles](https://arrow.apache.org/adbc/main/format/connection_profiles.html),
 and additionally supports writing (`INSERT`, `CREATE TABLE AS`) into the
 attached database through ADBC bulk ingest. Install this driver's manifest
