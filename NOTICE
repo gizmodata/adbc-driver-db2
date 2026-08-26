@@ -1,0 +1,16 @@
+adbc-driver-db2
+Copyright (c) 2026 GizmoData LLC
+
+This driver is an independent implementation of the DRDA protocol, an open
+standard published by The Open Group. It was written with reference to:
+
+- Apache Derby (https://db.apache.org/derby/, Apache-2.0) — the network
+  client and server DRDA implementations.
+- pydrda (https://github.com/nakagami/pydrda, MIT) — a pure-Python Db2
+  DRDA client by Hajime Nakagami; parts of the Db2-specific message
+  encoding in internal/drda were ported from it.
+
+It is built on the Apache Arrow ADBC Go framework
+(https://github.com/apache/arrow-adbc, Apache-2.0) and the Apache Arrow Go
+library (https://github.com/apache/arrow-go, Apache-2.0); those libraries
+ship under their own license terms.

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- README: full badge set and more examples (pandas/Polars, executemany,
+  DuckDB/GizmoSQL `adbc_scanner`, connection profiles, Go ingest).
+- LICENSE is now the plain MIT text (GitHub license detection); third-party
+  attributions moved to NOTICE.
+
 ## [0.1.0] - 2026-08-26
 
 ### Added

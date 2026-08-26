@@ -3,6 +3,10 @@
 [<img src="https://img.shields.io/badge/GitHub-gizmodata%2Fadbc--driver--db2-blue.svg?logo=Github">](https://github.com/gizmodata/adbc-driver-db2)
 [![CI](https://github.com/gizmodata/adbc-driver-db2/actions/workflows/ci.yml/badge.svg)](https://github.com/gizmodata/adbc-driver-db2/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gizmodata/adbc-driver-db2.svg)](https://pkg.go.dev/github.com/gizmodata/adbc-driver-db2)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/gizmodata/adbc-driver-db2)](go.mod)
+[![Supported Python Versions](https://img.shields.io/pypi/pyversions/adbc-driver-db2)](https://pypi.org/project/adbc-driver-db2/)
+[![PyPI version](https://badge.fury.io/py/adbc-driver-db2.svg)](https://badge.fury.io/py/adbc-driver-db2)
+[![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-db2.svg)](https://pypi.org/project/adbc-driver-db2/)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-db2)](LICENSE)
 
 A **pure-Go [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for
@@ -120,6 +124,62 @@ table are sized from the first batch (`adbc.db2.ingest.varchar_length`
 overrides) because Db2's row-size limit depends on the tablespace page
 size. Values over 32 KiB are sent as out-of-line BLOB/CLOB data.
 
+### pandas and Polars
+
+```python
+with db2.connect(uri=uri, username=user, password=pw) as conn, conn.cursor() as cur:
+    cur.execute("SELECT * FROM SYSCAT.TABLES")
+    df = cur.fetch_df()                                   # pandas
+    # or, zero-copy into Polars:
+    import polars as pl
+    cur.execute("SELECT * FROM SYSCAT.COLUMNS")
+    pl_df = pl.from_arrow(cur.fetch_arrow_table())
+```
+
+### Parameters and executemany
+
+```python
+import datetime
+
+with db2.connect(uri=uri, username=user, password=pw, autocommit=True) as conn, conn.cursor() as cur:
+    cur.execute("CREATE TABLE EVENTS (ID INTEGER NOT NULL, NAME VARCHAR(40), AT TIMESTAMP)")
+    cur.executemany(
+        "INSERT INTO EVENTS VALUES (?, ?, ?)",
+        [(1, "start", datetime.datetime(2024, 1, 1, 9, 0)), (2, "stop", None)],
+    )   # rows are pipelined many-per-round-trip, not sent one at a time
+    cur.execute("SELECT NAME FROM EVENTS WHERE ID = ?", parameters=(2,))
+    print(cur.fetchone())
+```
+
+### Query Db2 live from DuckDB or GizmoSQL (`adbc_scanner`)
+
+The c-shared driver plugs straight into DuckDB's
+[`adbc_scanner`](https://duckdb.org/community_extensions/extensions/adbc_scanner)
+community extension — and therefore into [GizmoSQL](https://gizmodata.com/gizmosql),
+which embeds DuckDB — so Db2 tables can be joined, filtered and pushed
+into DuckDB/GizmoSQL tables with plain SQL:
+
+```sql
+INSTALL adbc_scanner FROM community;
+LOAD adbc_scanner;
+
+SET VARIABLE db2 = adbc_connect({
+    'driver':   '/path/to/libadbc_driver_db2.so',   -- adbc_driver_db2._driver_path() in Python
+    'uri':      'db2://db2host:50000/SAMPLE',
+    'username': 'db2inst1',
+    'password': '********'
+});
+
+-- pull
+CREATE TABLE orders AS
+  SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SALES.ORDERS');
+
+-- or join Db2 with local data without copying it first
+SELECT o.ORDER_ID, c.name
+FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT ORDER_ID, CUST_ID FROM SALES.ORDERS') o
+JOIN customers c ON c.id = o.CUST_ID;
+```
+
 ### Alternative: drive `adbc_driver_manager` directly
 
 ```python
@@ -139,9 +199,23 @@ conn = dbapi.connect(
 python -m adbc_driver_db2 install-manifest
 ```
 
-writes a `db2.toml` ADBC driver manifest so `adbc_driver_manager.dbapi.connect(uri="db2://...")`
-and connection profiles (`driver = "db2"`) resolve this wheel's driver by
-name.
+writes a `db2.toml` ADBC driver manifest so the driver resolves by name
+from any ADBC consumer — `adbc_driver_manager.dbapi.connect(uri="db2://...")`,
+DuckDB's `adbc_connect({'driver': 'db2', ...})`, DBeaver's ADBC
+connection type — and from connection profiles:
+
+```toml
+# ~/.config/adbc/profiles/warehouse.toml
+driver   = "db2"
+uri      = "db2://db2host:50000/SAMPLE?schema=SALES"
+username = "reporting"
+password = "********"
+```
+
+```python
+from adbc_driver_manager import dbapi
+conn = dbapi.connect(profile="warehouse")
+```
 
 ## Go
 
@@ -163,6 +237,16 @@ stmt, _ := conn.NewStatement()
 stmt.SetSqlQuery("SELECT * FROM SYSCAT.TABLES")
 reader, _, _ := stmt.ExecuteQuery(ctx)
 for reader.Next() { rec := reader.RecordBatch(); ... }
+```
+
+Bulk ingest from Go:
+
+```go
+stmt, _ := conn.NewStatement()
+stmt.SetOption(adbc.OptionKeyIngestTargetTable, "ORDERS_COPY")
+stmt.SetOption(adbc.OptionKeyIngestMode, adbc.OptionValueIngestModeCreateAppend)
+stmt.BindStream(ctx, reader)          // any array.RecordReader — e.g. from Parquet, Flight, or another ADBC driver
+rows, _ := stmt.ExecuteUpdate(ctx)
 ```
 
 The `internal/drda` package is a self-contained DRDA client (connect,
