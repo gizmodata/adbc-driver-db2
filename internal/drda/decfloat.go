@@ -95,3 +95,74 @@ func decodeDecFloat(data []byte) (Decimal, bool, decFloatSpecial) {
 }
 
 var _ = binary.BigEndian
+
+func dpdEncode(d2, d1, d0 int) uint32 {
+	h2, h1, h0 := d2 >= 8, d1 >= 8, d0 >= 8
+	v2, v1, v0 := uint32(d2&7), uint32(d1&7), uint32(d0&7)
+	switch {
+	case !h2 && !h1 && !h0:
+		return v2<<7 | v1<<4 | v0
+	case !h2 && !h1 && h0:
+		return v2<<7 | v1<<4 | 8 | (v0 & 1)
+	case !h2 && h1 && !h0:
+		return v2<<7 | ((v0>>2)&1)<<6 | ((v0>>1)&1)<<5 | (v1&1)<<4 | 1<<3 | 1<<1 | (v0 & 1)
+	case h2 && !h1 && !h0:
+		return ((v0>>2)&1)<<9 | ((v0>>1)&1)<<8 | (v2&1)<<7 | v1<<4 | 1<<3 | 1<<2 | (v0 & 1)
+	case h2 && h1 && !h0:
+		return ((v0>>2)&1)<<9 | ((v0>>1)&1)<<8 | (v2&1)<<7 | (v1&1)<<4 | 1<<3 | 1<<2 | 1<<1 | (v0 & 1)
+	case h2 && !h1 && h0:
+		return ((v1>>2)&1)<<9 | ((v1>>1)&1)<<8 | (v2&1)<<7 | 1<<5 | (v1&1)<<4 | 1<<3 | 1<<2 | 1<<1 | (v0 & 1)
+	case !h2 && h1 && h0:
+		return v2<<7 | 1<<6 | (v1&1)<<4 | 1<<3 | 1<<2 | 1<<1 | (v0 & 1)
+	default:
+		return (v2&1)<<7 | 1<<6 | 1<<5 | (v1&1)<<4 | 1<<3 | 1<<2 | 1<<1 | (v0 & 1)
+	}
+}
+
+// encodeDecFloat encodes a finite Decimal as 8- or 16-byte DPD.
+func encodeDecFloat(d Decimal, nBytes int) []byte {
+	var bias, groups, expBits, maxDigits int
+	if nBytes == 8 {
+		bias, groups, expBits, maxDigits = 398, 5, 8, 16
+	} else {
+		nBytes = 16
+		bias, groups, expBits, maxDigits = 6176, 11, 12, 34
+	}
+	neg := d.Unscaled.Sign() < 0
+	digits := new(big.Int).Abs(d.Unscaled).String()
+	exp := -int(d.Scale)
+	// Trim excess precision from the right (round toward zero).
+	for len(digits) > maxDigits {
+		digits = digits[:len(digits)-1]
+		exp++
+	}
+	for len(digits) < maxDigits {
+		digits = "0" + digits
+	}
+	lead := int(digits[0] - '0')
+	cont := digits[1:]
+	biased := exp + bias
+	var g uint64
+	if lead >= 8 {
+		g = 0x18 | uint64(lead-8)<<2 | uint64(biased>>uint(expBits))
+	} else {
+		g = uint64(biased>>uint(expBits))<<3 | uint64(lead)
+	}
+	e := uint64(biased) & (1<<uint(expBits) - 1)
+	t := new(big.Int)
+	for i := 0; i < groups; i++ {
+		t.Lsh(t, 10)
+		t.Or(t, big.NewInt(int64(dpdEncode(int(cont[3*i]-'0'), int(cont[3*i+1]-'0'), int(cont[3*i+2]-'0')))))
+	}
+	totalBits := nBytes * 8
+	w := new(big.Int)
+	if neg {
+		w.SetBit(w, totalBits-1, 1)
+	}
+	w.Or(w, new(big.Int).Lsh(new(big.Int).SetUint64(g), uint(totalBits-6)))
+	w.Or(w, new(big.Int).Lsh(new(big.Int).SetUint64(e), uint(groups*10)))
+	w.Or(w, t)
+	out := make([]byte, nBytes)
+	w.FillBytes(out)
+	return out
+}

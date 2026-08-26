@@ -92,6 +92,8 @@ const (
 	TypeNLobBytes  byte = 0xC9
 	TypeLobCSBCS   byte = 0xCE // inline CLOB (single-byte)
 	TypeNLobCSBCS  byte = 0xCF
+	TypeLobCMixed  byte = 0xCE // Db2 uses the same code points for mixed (UTF-8) CLOB parameters
+	TypeNLobCMixed byte = 0xCF
 )
 
 // IsNullable reports whether a DRDA FD:OCA type is the nullable variant.

@@ -39,9 +39,6 @@ const (
 
 	// MaxDSSLength is the largest single (uncontinued) DSS.
 	MaxDSSLength = 32767
-	// Continuation segments carry at most this much payload (2-byte
-	// length prefix included).
-	maxSegmentLength = 32767
 )
 
 // DSS is a single decoded Data Stream Structure.
@@ -81,7 +78,7 @@ func ReadDSS(r io.Reader) (*DSS, error) {
 	objLen := int(binary.BigEndian.Uint16(hdr[6:8]))
 	d.CodePoint = CodePoint(binary.BigEndian.Uint16(hdr[8:10]))
 
-	continued := dssLen == 0xFFFF || objLen&0x8000 != 0
+	continued := dssLen&0x8000 != 0 || objLen&0x8000 != 0
 	if !continued {
 		if objLen < 4 || objLen != dssLen-6 {
 			return nil, fmt.Errorf("%w: DSS length %d, object length %d", ErrInvalidDSS, dssLen, objLen)
@@ -93,45 +90,52 @@ func ReadDSS(r io.Reader) (*DSS, error) {
 		return d, nil
 	}
 
-	// Continued DSS. The first segment's object length has its high bit
-	// set; its actual length is (objLen & 0x7FFF). Then a chain of
-	// [uint16 len][data] segments follows until one arrives without the
-	// high bit set.
-	firstLen := objLen & 0x7FFF
-	if dssLen == 0xFFFF {
-		// Db2 LUW sends 0xFFFF DSS length with an object length of
-		// 0x8004 (= 4 | continued) for the first segment; the segment
-		// then runs to the 32767-byte DSS boundary.
-		firstLen = MaxDSSLength - 6
+	// Large object: the DDM object length field is 0x8004 + n where n is
+	// the number of extended-length bytes following the code point
+	// (n = 0 means "unknown length, read segments until the last one").
+	// The DSS itself is split into segments of at most 32767 bytes; the
+	// high bit of each segment's length word says another follows.
+	extLen := objLen - 0x8004
+	if objLen&0x8000 == 0 {
+		extLen = 0
 	}
-	if firstLen < 4 {
-		return nil, fmt.Errorf("%w: continued first segment length %d", ErrInvalidDSS, firstLen)
+	if extLen < 0 || extLen > 8 {
+		return nil, fmt.Errorf("%w: object length 0x%04X", ErrInvalidDSS, objLen)
+	}
+	if extLen > 0 {
+		var eb [8]byte
+		if _, err := io.ReadFull(r, eb[:extLen]); err != nil {
+			return nil, fmt.Errorf("ddm: read DSS extended length: %w", err)
+		}
+	}
+	segLen := dssLen & 0x7FFF
+	more := dssLen&0x8000 != 0
+	first := segLen - 10 - extLen
+	if first < 0 {
+		return nil, fmt.Errorf("%w: continued first segment length %d", ErrInvalidDSS, segLen)
 	}
 	payload := make([]byte, 0, 64*1024)
-	buf := make([]byte, firstLen-4)
+	buf := make([]byte, first)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, fmt.Errorf("ddm: read DSS first segment: %w", err)
 	}
 	payload = append(payload, buf...)
-	for {
+	for more {
 		var lb [2]byte
 		if _, err := io.ReadFull(r, lb[:]); err != nil {
 			return nil, fmt.Errorf("ddm: read DSS continuation length: %w", err)
 		}
-		segLen := int(binary.BigEndian.Uint16(lb[:]))
-		more := segLen&0x8000 != 0
-		segLen &= 0x7FFF
-		if segLen < 2 {
-			return nil, fmt.Errorf("%w: continuation segment length %d", ErrInvalidDSS, segLen)
+		n := int(binary.BigEndian.Uint16(lb[:]))
+		more = n&0x8000 != 0
+		n &= 0x7FFF
+		if n < 2 {
+			return nil, fmt.Errorf("%w: continuation segment length %d", ErrInvalidDSS, n)
 		}
-		seg := make([]byte, segLen-2)
+		seg := make([]byte, n-2)
 		if _, err := io.ReadFull(r, seg); err != nil {
 			return nil, fmt.Errorf("ddm: read DSS continuation: %w", err)
 		}
 		payload = append(payload, seg...)
-		if !more {
-			break
-		}
 	}
 	d.Payload = payload
 	return d, nil
@@ -160,12 +164,13 @@ func (o Object) Body() []byte { return o[4:] }
 // Writer batches DSSs for one request transmission. DSSs written with
 // Chained=true are marked chained; Flush sends the whole buffer.
 type Writer struct {
-	w   io.Writer
-	buf []byte
+	w       io.Writer
+	buf     []byte
+	lastHdr int // offset of the most recent DSS header in buf
 }
 
 // NewWriter wraps w.
-func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
+func NewWriter(w io.Writer) *Writer { return &Writer{w: w, lastHdr: -1} }
 
 // WriteRequest appends a request or object DSS carrying obj to the
 // pending transmission. The DSS type is chosen from the code point:
@@ -186,6 +191,7 @@ func (wr *Writer) WriteRequest(obj Object, correlationID uint16, sameCorrelatorN
 		format |= dssFlagSameCorrelator
 	}
 
+	wr.lastHdr = len(wr.buf)
 	total := len(obj) + 6
 	if total <= MaxDSSLength {
 		var hdr [6]byte
@@ -198,35 +204,44 @@ func (wr *Writer) WriteRequest(obj Object, correlationID uint16, sameCorrelatorN
 		return
 	}
 
-	// Continued DSS: first segment fills a full 32767-byte DSS; the
-	// object length has its high bit set. Remaining bytes follow in
-	// segments of up to 32767 bytes (2-byte length prefix included), with
-	// the high bit set on every segment except the last.
+	// Large object (> 32767 bytes including headers): DDM extended
+	// length form. Object length field = 0x8004 + 4 with a 4-byte
+	// extended length after the code point, and the DSS split into
+	// 32767-byte segments whose length words carry a continuation bit.
+	body := obj.Body()
+	const extLen = 4
+	firstData := MaxDSSLength - 6 - 4 - extLen
+	if firstData > len(body) {
+		firstData = len(body)
+	}
+	segLen := uint16(6 + 4 + extLen + firstData)
+	rest := body[firstData:]
+	if len(rest) > 0 {
+		segLen |= 0x8000
+	}
 	var hdr [6]byte
-	binary.BigEndian.PutUint16(hdr[0:2], uint16(MaxDSSLength))
+	binary.BigEndian.PutUint16(hdr[0:2], segLen)
 	hdr[2] = dssMagic
 	hdr[3] = format
 	binary.BigEndian.PutUint16(hdr[4:6], correlationID)
 	wr.buf = append(wr.buf, hdr[:]...)
-	firstBody := MaxDSSLength - 6
-	var objHdr [4]byte
-	binary.BigEndian.PutUint16(objHdr[0:2], uint16(firstBody)|0x8000)
+	var objHdr [4 + extLen]byte
+	binary.BigEndian.PutUint16(objHdr[0:2], 0x8004+extLen)
 	binary.BigEndian.PutUint16(objHdr[2:4], uint16(obj.CodePoint()))
+	binary.BigEndian.PutUint32(objHdr[4:8], uint32(len(body)))
 	wr.buf = append(wr.buf, objHdr[:]...)
-	body := obj.Body()
-	wr.buf = append(wr.buf, body[:firstBody-4]...)
-	rest := body[firstBody-4:]
+	wr.buf = append(wr.buf, body[:firstData]...)
 	for len(rest) > 0 {
 		n := len(rest)
-		if n > maxSegmentLength-2 {
-			n = maxSegmentLength - 2
+		if n > MaxDSSLength-2 {
+			n = MaxDSSLength - 2
 		}
-		segLen := uint16(n + 2)
+		l := uint16(n + 2)
 		if n < len(rest) {
-			segLen |= 0x8000
+			l |= 0x8000
 		}
 		var lb [2]byte
-		binary.BigEndian.PutUint16(lb[:], segLen)
+		binary.BigEndian.PutUint16(lb[:], l)
 		wr.buf = append(wr.buf, lb[:]...)
 		wr.buf = append(wr.buf, rest[:n]...)
 		rest = rest[n:]
@@ -240,8 +255,24 @@ func (wr *Writer) Flush() error {
 	}
 	_, err := wr.w.Write(wr.buf)
 	wr.buf = wr.buf[:0]
+	wr.lastHdr = -1
 	return err
 }
 
 // Pending returns the number of buffered bytes (for tests).
 func (wr *Writer) Pending() int { return len(wr.buf) }
+
+// UnchainLast clears the chained flag on the most recently written DSS
+// so the buffered transmission is well-formed. Callers that build a
+// variable-length chain append every DSS as chained and then call this.
+func (wr *Writer) UnchainLast() {
+	if wr.lastHdr >= 0 && wr.lastHdr+3 < len(wr.buf) {
+		wr.buf[wr.lastHdr+3] &^= dssFlagChained | dssFlagSameCorrelator
+	}
+}
+
+// Reset discards any buffered, unsent DSSs.
+func (wr *Writer) Reset() {
+	wr.buf = wr.buf[:0]
+	wr.lastHdr = -1
+}
