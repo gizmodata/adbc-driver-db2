@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // SQLCA is the parsed SQL communications area from a SQLCARD / SQLDARD.
@@ -190,9 +191,45 @@ func parseSQLCAGRP(r *byteReader) *SQLCA {
 	return ca
 }
 
+// decodeMixed decodes bytes that are UTF-8 in principle but, for a few
+// DDM-level fields (notably SQLERRMSG tokens), arrive in EBCDIC. EBCDIC
+// letters (0x81-0xE9) can accidentally form valid UTF-8, so when the
+// input has high bytes both decodings are scored on how much plain
+// ASCII text they yield and the more readable one wins.
 func decodeMixed(b []byte) string {
-	if isValidUTF8Text(b) {
+	hasHigh := false
+	for _, c := range b {
+		if c >= 0x80 {
+			hasHigh = true
+			break
+		}
+	}
+	if !hasHigh {
 		return string(b)
 	}
-	return decodeEBCDICText(b)
+	utf := ""
+	utfScore := -1.0
+	if utf8.Valid(b) {
+		utf = string(b)
+		utfScore = readableScore(utf)
+	}
+	ebc := decodeEBCDICText(b)
+	if utfScore >= readableScore(ebc) {
+		return utf
+	}
+	return ebc
+}
+
+func readableScore(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	n, good := 0, 0
+	for _, r := range s {
+		n++
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == ' ' || r == '.' || r == ',' || r == '_' || r == '-' || r == '"' || r == '\'' {
+			good++
+		}
+	}
+	return float64(good) / float64(n)
 }

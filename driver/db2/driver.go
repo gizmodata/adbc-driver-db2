@@ -2,8 +2,10 @@ package db2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -97,9 +99,16 @@ type connectionImpl struct {
 	cfg        *connConfig
 	autoCommit bool
 	mu         sync.Mutex
+	closed     bool
 }
 
 func (c *connectionImpl) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errStatus(adbc.StatusInvalidState, "connection already closed")
+	}
+	c.closed = true
 	// Roll back anything uncommitted rather than leaving the UOW to the
 	// server's discretion; ignore errors — the socket is going away.
 	if !c.autoCommit {
@@ -109,6 +118,9 @@ func (c *connectionImpl) Close() error {
 }
 
 func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
+	if c.closed {
+		return nil, errStatus(adbc.StatusInvalidState, "connection is closed")
+	}
 	return &statementImpl{conn: c, alloc: c.alloc}, nil
 }
 
@@ -166,6 +178,33 @@ func (c *connectionImpl) SetOption(key, value string) error {
 			return fromDRDAError(err)
 		}
 		return c.autoCommitIfNeeded(context.Background())
+	case adbc.OptionKeyIsolationLevel:
+		var iso string
+		switch value {
+		case string(adbc.LevelDefault), string(adbc.LevelReadCommitted):
+			iso = "CS"
+		case string(adbc.LevelReadUncommitted):
+			iso = "UR"
+		case string(adbc.LevelRepeatableRead):
+			iso = "RS"
+		case string(adbc.LevelSerializable), string(adbc.LevelLinearizable), string(adbc.LevelSnapshot):
+			iso = "RR"
+		default:
+			return errStatus(adbc.StatusNotImplemented, "isolation level %q is not supported by Db2", value)
+		}
+		_, err := c.conn.ExecImmediate(context.Background(), "SET CURRENT ISOLATION = "+iso)
+		if err != nil {
+			return fromDRDAError(err)
+		}
+		return c.autoCommitIfNeeded(context.Background())
+	case adbc.OptionKeyReadOnly:
+		switch value {
+		case adbc.OptionValueEnabled, adbc.OptionValueDisabled:
+			// Db2 has no connection-level read-only switch over DRDA; accept
+			// the option so generic tooling works, without enforcement.
+			return nil
+		}
+		return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
 	}
 	return errStatus(adbc.StatusNotImplemented, "unknown connection option %q", key)
 }
@@ -207,17 +246,25 @@ func (c *connectionImpl) queryFinished(ok bool) {
 
 // statementImpl implements adbc.Statement.
 type statementImpl struct {
-	conn         *connectionImpl
-	alloc        memory.Allocator
-	sql          string
-	targetTable  string
-	targetSchema string
-	ingestMode   string
-	bound        arrow.Record
-	boundStream  array.RecordReader
+	conn                *connectionImpl
+	alloc               memory.Allocator
+	sql                 string
+	targetTable         string
+	targetSchema        string
+	ingestMode          string
+	ingestTemporary     bool
+	ingestVarcharLength int
+	ingestBatchRows     int
+	closed              bool
+	bound               arrow.Record
+	boundStream         array.RecordReader
 }
 
 func (s *statementImpl) Close() error {
+	if s.closed {
+		return errStatus(adbc.StatusInvalidState, "statement already closed")
+	}
+	s.closed = true
 	s.clearBound()
 	return nil
 }
@@ -233,7 +280,7 @@ func (s *statementImpl) clearBound() {
 	}
 }
 
-func (s *statementImpl) SetSqlQuery(sql string) error { s.sql = sql; return nil }
+func (s *statementImpl) SetSqlQuery(sql string) error { s.sql = addDummyFrom(sql); return nil }
 
 func (s *statementImpl) SetOption(key, value string) error {
 	switch key {
@@ -249,6 +296,27 @@ func (s *statementImpl) SetOption(key, value string) error {
 		default:
 			return errStatus(adbc.StatusInvalidArgument, "unknown ingest mode %q", value)
 		}
+	case adbc.OptionValueIngestTemporary:
+		switch value {
+		case adbc.OptionValueEnabled:
+			s.ingestTemporary = true
+		case adbc.OptionValueDisabled:
+			s.ingestTemporary = false
+		default:
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		}
+	case OptionIngestVarcharLength:
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		}
+		s.ingestVarcharLength = n
+	case OptionIngestBatchRows:
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		}
+		s.ingestBatchRows = n
 	default:
 		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", key)
 	}
@@ -262,11 +330,22 @@ func (s *statementImpl) SetSubstraitPlan([]byte) error {
 func (s *statementImpl) Prepare(context.Context) error { return nil }
 
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
+	if s.targetTable != "" && (s.bound != nil || s.boundStream != nil) {
+		n, err := s.executeIngest(ctx)
+		if err != nil {
+			return nil, -1, err
+		}
+		rr, err := array.NewRecordReader(arrow.NewSchema([]arrow.Field{}, nil), nil)
+		if err != nil {
+			return nil, -1, err
+		}
+		return rr, n, nil
+	}
 	if s.sql == "" {
 		return nil, -1, errStatus(adbc.StatusInvalidState, "ExecuteQuery: no SQL set")
 	}
 	if s.bound != nil || s.boundStream != nil {
-		return nil, -1, errStatus(adbc.StatusNotImplemented, "parameter binding is not implemented yet")
+		return s.executeBoundQuery(ctx)
 	}
 	q, err := s.conn.conn.Query(ctx, s.sql)
 	if err != nil {
@@ -290,10 +369,13 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 	if s.targetTable != "" && (s.bound != nil || s.boundStream != nil) {
-		return -1, errStatus(adbc.StatusNotImplemented, "bulk ingest is not implemented yet")
+		return s.executeIngest(ctx)
 	}
 	if s.sql == "" {
 		return -1, errStatus(adbc.StatusInvalidState, "ExecuteUpdate: no SQL set")
+	}
+	if s.bound != nil || s.boundStream != nil {
+		return s.executeBoundUpdate(ctx)
 	}
 	res, err := s.conn.conn.ExecImmediate(ctx, s.sql)
 	if err != nil {
@@ -317,7 +399,27 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error
 }
 
 func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
-	return nil, errStatus(adbc.StatusNotImplemented, "GetParameterSchema")
+	if s.sql == "" {
+		return nil, errStatus(adbc.StatusInvalidState, "GetParameterSchema: no SQL set")
+	}
+	_, params, err := s.conn.conn.Describe(context.Background(), s.sql)
+	if err != nil {
+		var ca *drda.SQLCA
+		if errors.As(err, &ca) && ca.SQLCode == -418 {
+			// SQL0418N: a parameter marker whose type cannot be inferred
+			// (e.g. "SELECT ?"). The parameter schema is unknown.
+			return nil, nil
+		}
+		return nil, fromDRDAError(err)
+	}
+	fields := make([]arrow.Field, len(params))
+	for i, p := range params {
+		f := arrowFieldFor(p)
+		f.Name = strconv.Itoa(i)
+		f.Nullable = true
+		fields[i] = f
+	}
+	return arrow.NewSchema(fields, nil), nil
 }
 
 func (s *statementImpl) Bind(_ context.Context, rec arrow.Record) error {

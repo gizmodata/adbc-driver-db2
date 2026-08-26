@@ -183,6 +183,10 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 			leftover, ca, err := q.decoder.DecodeBlock(payload, func(row []Value) error {
 				q.pending = append(q.pending, row)
 				return nil
+			}, func(w *SQLCA) {
+				if len(q.Warnings) < 100 {
+					q.Warnings = append(q.Warnings, w)
+				}
 			})
 			if err != nil {
 				return err

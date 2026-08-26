@@ -1,8 +1,6 @@
 package drda
 
 import (
-	"unicode/utf8"
-
 	"github.com/gizmodata/adbc-driver-db2/internal/ddm"
 )
 
@@ -107,16 +105,6 @@ func parseSQLDAGRP(r *byteReader) ColumnDesc {
 		}
 	}
 	return c
-}
-
-func isValidUTF8Text(b []byte) bool {
-	if !utf8.Valid(b) {
-		return false
-	}
-	// Pure-ASCII EBCDIC text is also "valid UTF-8" (bytes < 0x80 are
-	// rare in EBCDIC letters, which live in 0x81+). A run of bytes all
-	// >= 0x80 that happens to be valid UTF-8 is unlikely; accept.
-	return true
 }
 
 func decodeEBCDICText(b []byte) string { return ddm.DecodeEBCDIC(b) }

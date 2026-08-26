@@ -527,7 +527,7 @@ var bigTen = big.NewInt(10)
 
 // paramStatement is a prepared statement whose parameter descriptors
 // are known.
-type paramStatement struct {
+type ParamStatement struct {
 	conn    *Conn
 	sql     string
 	Columns []ColumnDesc
@@ -535,12 +535,12 @@ type paramStatement struct {
 }
 
 // PrepareParams prepares sql and describes its input parameters.
-func (c *Conn) PrepareParams(ctx context.Context, sql string) (*paramStatement, error) {
+func (c *Conn) PrepareParams(ctx context.Context, sql string) (*ParamStatement, error) {
 	cols, params, err := c.Describe(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
-	return &paramStatement{conn: c, sql: sql, Columns: cols, Params: params}, nil
+	return &ParamStatement{conn: c, sql: sql, Columns: cols, Params: params}, nil
 }
 
 // ExecBatch executes the prepared statement once per row of values. All
@@ -550,7 +550,7 @@ func (c *Conn) PrepareParams(ctx context.Context, sql string) (*paramStatement, 
 //
 // The statement must have been prepared on this connection since the
 // last PRPSQLSTT (the package section is shared).
-func (ps *paramStatement) ExecBatch(ctx context.Context, rows [][]Value) (int64, error) {
+func (ps *ParamStatement) ExecBatch(ctx context.Context, rows [][]Value) (int64, error) {
 	c := ps.conn
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -634,7 +634,7 @@ func (ps *paramStatement) ExecBatch(ctx context.Context, rows [][]Value) (int64,
 
 // QueryParams opens a cursor for the prepared statement with one row of
 // parameter values.
-func (ps *paramStatement) QueryParams(ctx context.Context, values []Value) (*Query, error) {
+func (ps *ParamStatement) QueryParams(ctx context.Context, values []Value) (*Query, error) {
 	c := ps.conn
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -88,26 +88,42 @@ type RowDecoder struct {
 //
 // A query block may end in the middle of a row; the unconsumed tail is
 // returned as leftover so the caller can prepend it to the next block.
-func (d *RowDecoder) DecodeBlock(body []byte, emit func([]Value) error) (leftover []byte, ca *SQLCA, err error) {
+//
+// Each row is an SQLCADTA: a nullable SQLCAGRP (0xFF when null, else
+// a full SQLCA — typically a warning such as SQLSTATE 01003) followed by
+// a nullable SQLDTAGRP (0xFF at end of data, else 0x00 and the row).
+// Warnings are passed to onWarning; an error SQLCA or SQLCODE +100 ends
+// the block and is returned.
+func (d *RowDecoder) DecodeBlock(body []byte, emit func([]Value) error, onWarning func(*SQLCA)) (leftover []byte, ca *SQLCA, err error) {
 	r := &byteReader{b: body, le: d.LittleEndian}
 	for r.remaining() > 0 {
 		rowStart := r.pos
-		flag := r.u8()
-		if flag != 0xFF {
-			// Rewind one byte and parse a full SQLCAGRP.
-			r.pos--
-			ca := parseSQLCAGRP(r)
+		var rowCA *SQLCA
+		if r.b[r.pos] == 0xFF {
+			r.pos++
+		} else {
+			rowCA = parseSQLCAGRP(r)
 			if r.err != nil {
 				if r.truncated {
 					return body[rowStart:], nil, nil
 				}
 				return nil, nil, r.err
 			}
-			return nil, ca, nil
+			if rowCA.IsError() || rowCA.SQLCode == 100 {
+				return nil, rowCA, nil
+			}
 		}
-		// With a null SQLCA the RLO still flows a 0x00 separator before
-		// the row data.
-		_ = r.u8()
+		ind := r.u8()
+		if r.err != nil {
+			return body[rowStart:], nil, nil
+		}
+		if rowCA != nil && onWarning != nil {
+			onWarning(rowCA)
+		}
+		if ind == 0xFF {
+			// Null SQLDTAGRP: no row follows.
+			return nil, rowCA, nil
+		}
 		row := make([]Value, len(d.Fields))
 		for i, f := range d.Fields {
 			row[i] = d.decodeField(r, f)
