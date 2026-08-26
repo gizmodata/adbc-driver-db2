@@ -64,7 +64,7 @@ Group publishes the DRDA V5 spec (free registration).
 
 ## Conventions
 
-- Go 1.25 floor, Arrow Go v18, arrow-adbc v1.11 (match quack).
+- Go 1.26 floor, Arrow Go v18, arrow-adbc v1.12 (keep in step with gizmosql-adbc).
 - Options: `adbc.db2.<noun>`; driver name "ADBC Db2 Driver - Go".
 - Keep `CHANGELOG.md` `[Unreleased]` current; semver tags `vX.Y.Z`;
   bump `driver/db2/version.go` and `python/adbc_driver_db2/_version.py`
