@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-26
+
+### Fixed
+- SQLSTATE / SQLERRPROC sent in EBCDIC (Db2 for z/OS, Db2 for i) were passed
+  through undecoded; the Python driver manager then failed with
+  "bytes must be in range(0, 256)" instead of reporting the SQL error.
+  Both are now decoded per the server's CCSID, and the C ABI never emits
+  a non-ASCII SQLSTATE.
+- macOS wheel is built with `MACOSX_DEPLOYMENT_TARGET=12.0` so it installs
+  on macOS 12+ instead of only the runner's release.
+
 ## [0.1.0] - 2026-08-26
 
 Built with Go 1.26.7, arrow-adbc v1.12.0, arrow-go v18.7.0.

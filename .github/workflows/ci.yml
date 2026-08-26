@@ -141,6 +141,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
         run: |
           go build -buildmode=c-shared -tags driverlib \
             -o "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}" ./pkg/db2
@@ -149,6 +150,10 @@ jobs:
           echo "ADBC_DB2_LIBRARY=$LIB" >> "$GITHUB_ENV"
       - name: Build wheel
         shell: bash
+        env:
+          # Let the arm64 wheel install on macOS 12+ rather than only on
+          # the runner's own macOS release.
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel

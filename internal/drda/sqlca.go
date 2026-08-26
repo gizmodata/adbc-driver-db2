@@ -162,8 +162,11 @@ func parseSQLCAGRP(r *byteReader) *SQLCA {
 	}
 	ca := &SQLCA{}
 	ca.SQLCode = r.i32()
-	ca.SQLState = string(r.take(5))
-	ca.SQLErrp = strings.TrimRight(string(r.take(8)), " ")
+	// SQLSTATE and SQLERRPROC are fixed-width character fields in the
+	// server's single-byte CCSID: ASCII/UTF-8 from Db2 LUW, EBCDIC from
+	// Db2 for z/OS and Db2 for i.
+	ca.SQLState = decodeFixedText(r.take(5))
+	ca.SQLErrp = strings.TrimRight(decodeFixedText(r.take(8)), " ")
 	// SQLCAXGRP
 	if r.u8() != 0xFF {
 		for i := range ca.SQLErrd {
@@ -218,6 +221,17 @@ func decodeMixed(b []byte) string {
 		return utf
 	}
 	return ebc
+}
+
+// decodeFixedText decodes a fixed-width identifier field that is either
+// ASCII or EBCDIC (all bytes >= 0x80 for letters/digits in EBCDIC).
+func decodeFixedText(b []byte) string {
+	for _, c := range b {
+		if c >= 0x80 {
+			return decodeEBCDICText(b)
+		}
+	}
+	return string(b)
 }
 
 func readableScore(s string) float64 {

@@ -107,7 +107,14 @@ func setErrWithDetails(err *C.struct_AdbcError, adbcError adbc.Error) {
 	}
 
 	for i := range 5 {
-		err.sqlstate[i] = C.char(adbcError.SqlState[i])
+		// The C ABI's sqlstate is char[5]; consumers assume ASCII. Never
+		// leak a non-ASCII byte (a signed char would make e.g. the Python
+		// driver manager raise "bytes must be in range(0, 256)").
+		b := adbcError.SqlState[i]
+		if b >= 0x80 {
+			b = '?'
+		}
+		err.sqlstate[i] = C.char(b)
 	}
 
 	if err.vendor_code != C.ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA {
