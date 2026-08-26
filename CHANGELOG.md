@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Integration test and README section for Columnar's DuckDB `adbc` community
+  extension: `read_adbc`, `ATTACH 'profile://…'`, and INSERT / CTAS into Db2
+  through ADBC bulk ingest, using the driver manifest + a connection profile.
+
 ### Changed
 - README and the DuckDB/GizmoSQL integration test use the `adbc_scanner`
   `CREATE SECRET` + `ATTACH` pattern (query Db2 as an attached catalog) instead

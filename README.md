@@ -195,6 +195,44 @@ SET VARIABLE db2 = adbc_connect({'secret': 'db2_secret'});
 SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SYSCAT.TABLES FETCH FIRST 10 ROWS ONLY');
 ```
 
+### Query Db2 from DuckDB via connection profiles (Columnar's `adbc` extension)
+
+Columnar's [`adbc`](https://github.com/columnar-tech/duckdb-adbc-client)
+community extension resolves databases through ADBC
+[connection profiles](https://arrow.apache.org/adbc/main/format/connection_profiles.html),
+and additionally supports writing (`INSERT`, `CREATE TABLE AS`) into the
+attached database through ADBC bulk ingest. Install this driver's manifest
+once, write a profile, and Db2 is a catalog:
+
+```sh
+python -m adbc_driver_db2 install-manifest        # registers driver "db2"
+cat > ~/.config/adbc/profiles/warehouse.toml <<EOF   # macOS: ~/Library/Application Support/ADBC/Profiles/
+profile_version = 1
+driver = "db2"
+
+[Options]
+uri = "db2://db2host:50000/SAMPLE"
+username = "db2inst1"
+password = "********"
+EOF
+```
+
+```sql
+INSTALL adbc FROM community;
+LOAD adbc;
+
+SELECT * FROM read_adbc('profile://warehouse', 'SELECT * FROM SALES.ORDERS FETCH FIRST 10 ROWS ONLY');
+
+ATTACH 'profile://warehouse' AS db2 (TYPE adbc);
+USE db2.SALES;
+SELECT COUNT(*) FROM ORDERS;
+CREATE TABLE ORDERS_2024 AS SELECT * FROM memory.staged_orders;   -- bulk ingest into Db2
+INSERT INTO ORDERS_2024 SELECT * FROM memory.late_orders;
+```
+
+Both DuckDB extensions are exercised in this repo's test suite
+(`python/tests/test_adbc_scanner.py`, `python/tests/test_duckdb_adbc_client.py`).
+
 ### Alternative: drive `adbc_driver_manager` directly
 
 ```python
