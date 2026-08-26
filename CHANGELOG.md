@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-26
+
 ### Added
 - Integration test and README section for Columnar's DuckDB `adbc` community
   extension: `read_adbc`, `ATTACH 'profile://…'`, and INSERT / CTAS into Db2
