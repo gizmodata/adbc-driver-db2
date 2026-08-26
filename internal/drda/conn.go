@@ -725,7 +725,7 @@ func (c *Conn) replyError(d *ddm.DSS) error {
 	switch d.CodePoint {
 	case ddm.SQLCARD, ddm.SQLDARD, ddm.QRYDSC, ddm.QRYDTA, ddm.EXTDTA, ddm.SQLDTARD,
 		ddm.OPNQRYRM, ddm.ENDQRYRM, ddm.ENDUOWRM, ddm.EXCSATRD, ddm.ACCSECRD,
-		ddm.SECCHKRM, ddm.ACCRDBRM, ddm.SQLRSLRD, ddm.SQLCINRD, ddm.CMDCMPRM:
+		ddm.SECCHKRM, ddm.ACCRDBRM, ddm.SQLRSLRD, ddm.SQLCINRD, ddm.CMDCMPRM, ddm.RDBUPDRM:
 		return nil
 	}
 	p, perr := ddm.ParseParams(d.Payload)
@@ -972,3 +972,6 @@ func pickSecMec(offered []uint16) uint16 {
 	}
 	return offered[0]
 }
+
+// Database returns the RDB name this connection is attached to.
+func (c *Conn) Database() string { return c.rdbnam }
