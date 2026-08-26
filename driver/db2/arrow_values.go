@@ -1,6 +1,7 @@
 package db2
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 	"strings"
@@ -153,33 +154,36 @@ func columnValues(col arrow.Array) ([]drda.Value, error) {
 		for i := 0; i < n; i++ {
 			set(i, drda.Decimal{Unscaled: a.Value(i).BigInt(), Scale: scale})
 		}
+	// String / binary values are zero-copy views into the record's
+	// buffers; the bound record may be released before the rows are
+	// sent (boundRows), so copy them out.
 	case *array.String:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, strings.Clone(a.Value(i)))
 		}
 	case *array.LargeString:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, strings.Clone(a.Value(i)))
 		}
 	case *array.StringView:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, strings.Clone(a.Value(i)))
 		}
 	case *array.Binary:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, bytes.Clone(a.Value(i)))
 		}
 	case *array.LargeBinary:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, bytes.Clone(a.Value(i)))
 		}
 	case *array.BinaryView:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, bytes.Clone(a.Value(i)))
 		}
 	case *array.FixedSizeBinary:
 		for i := 0; i < n; i++ {
-			set(i, a.Value(i))
+			set(i, bytes.Clone(a.Value(i)))
 		}
 	case *array.Date32:
 		for i := 0; i < n; i++ {

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension: `read_adbc`, `ATTACH 'profile://…'`, and INSERT / CTAS into Db2
   through ADBC bulk ingest, using the driver manifest + a connection profile.
 
+### Fixed
+- String and binary parameter values bound via `Bind`/`BindStream` could be
+  read after the bound record was released (garbage or empty values).
+
 ### Changed
 - README and the DuckDB/GizmoSQL integration test use the `adbc_scanner`
   `CREATE SECRET` + `ATTACH` pattern (query Db2 as an attached catalog) instead
