@@ -154,30 +154,45 @@ with db2.connect(uri=uri, username=user, password=pw, autocommit=True) as conn, 
 ### Query Db2 live from DuckDB or GizmoSQL (`adbc_scanner`)
 
 The c-shared driver plugs straight into DuckDB's
-[`adbc_scanner`](https://duckdb.org/community_extensions/extensions/adbc_scanner)
-community extension — and therefore into [GizmoSQL](https://gizmodata.com/gizmosql),
-which embeds DuckDB — so Db2 tables can be joined, filtered and pushed
-into DuckDB/GizmoSQL tables with plain SQL:
+[`adbc_scanner`](https://docs.gizmosql.com/adbc_scanner_duckdb/) community
+extension — and therefore into [GizmoSQL](https://gizmodata.com/gizmosql),
+which embeds DuckDB. Store the credentials in a DuckDB secret once, then
+`ATTACH` Db2 like any other database and query it with plain SQL
+(projection and filter pushdown included):
 
 ```sql
 INSTALL adbc_scanner FROM community;
 LOAD adbc_scanner;
 
-SET VARIABLE db2 = adbc_connect({
-    'driver':   '/path/to/libadbc_driver_db2.so',   -- adbc_driver_db2._driver_path() in Python
-    'uri':      'db2://db2host:50000/SAMPLE',
-    'username': 'db2inst1',
-    'password': '********'
-});
+CREATE SECRET db2_secret (
+    TYPE adbc,
+    SCOPE 'db2://db2host:50000/SAMPLE',
+    driver 'db2',                        -- by name after `python -m adbc_driver_db2 install-manifest`,
+                                         -- or a path: '/path/to/libadbc_driver_db2.so'
+    uri 'db2://db2host:50000/SAMPLE',
+    username 'db2inst1',
+    password '********'
+);
 
--- pull
-CREATE TABLE orders AS
-  SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SALES.ORDERS');
+ATTACH 'db2://db2host:50000/SAMPLE' AS db2 (TYPE adbc);
 
--- or join Db2 with local data without copying it first
+SELECT * FROM db2.SALES.ORDERS WHERE ORDER_DATE >= DATE '2024-01-01';
+
+-- join Db2 with local data without copying it first
 SELECT o.ORDER_ID, c.name
-FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT ORDER_ID, CUST_ID FROM SALES.ORDERS') o
+FROM db2.SALES.ORDERS o
 JOIN customers c ON c.id = o.CUST_ID;
+
+-- materialise a copy
+CREATE TABLE orders AS SELECT * FROM db2.SALES.ORDERS;
+```
+
+For arbitrary Db2 SQL (or to push data the other way) the secret also
+drives the function API:
+
+```sql
+SET VARIABLE db2 = adbc_connect({'secret': 'db2_secret'});
+SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SYSCAT.TABLES FETCH FIRST 10 ROWS ONLY');
 ```
 
 ### Alternative: drive `adbc_driver_manager` directly

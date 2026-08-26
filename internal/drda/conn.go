@@ -792,6 +792,7 @@ func (c *Conn) ExecImmediate(ctx context.Context, sql string) (*Result, error) {
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, err
 	}
+	c.trace("sql (immediate): %s", sql)
 	c.send(ctx, c.packEXCSQLIMM(c.pkgSN), 1, true, false)
 	c.send(ctx, c.packSQLSTT(sql), 1, false, true)
 	if err := c.flush(ctx); err != nil {
@@ -899,6 +900,7 @@ func (c *Conn) Describe(ctx context.Context, sql string) (cols, params []ColumnD
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, nil, err
 	}
+	c.trace("sql (describe): %s", sql)
 	c.send(ctx, c.packPRPSQLSTT(c.pkgSN), 1, true, false)
 	c.send(ctx, c.packSQLSTT(sql), 1, false, false)
 	c.send(ctx, c.packDSCSQLSTT(c.pkgSN), 2, false, true)

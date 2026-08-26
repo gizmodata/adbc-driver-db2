@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- README and the DuckDB/GizmoSQL integration test use the `adbc_scanner`
+  `CREATE SECRET` + `ATTACH` pattern (query Db2 as an attached catalog) instead
+  of `SET VARIABLE`/`adbc_connect`.
+- DRDA trace (`adbc.db2.trace`) now includes the SQL text of each statement.
+
 ## [0.1.1] - 2026-08-26
 
 ### Fixed

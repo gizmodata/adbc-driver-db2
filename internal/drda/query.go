@@ -48,6 +48,7 @@ func (c *Conn) Query(ctx context.Context, sql string) (*Query, error) {
 	}
 	q := &Query{conn: c}
 	q.decoder.LittleEndian = c.Server.LittleEndian
+	c.trace("sql: %s", sql)
 
 	if looksLikeQuery(sql) {
 		// One round trip: PRPSQLSTT + SQLSTT + OPNQRY chained.

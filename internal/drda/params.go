@@ -560,6 +560,7 @@ func (ps *ParamStatement) ExecBatch(ctx context.Context, rows [][]Value) (int64,
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	c.trace("sql (batch of %d): %s", len(rows), ps.sql)
 	// Re-prepare so the section holds this statement (a previous
 	// Describe/Query may have replaced it).
 	c.send(ctx, c.packPRPSQLSTT(c.pkgSN), 1, true, false)
@@ -641,6 +642,7 @@ func (ps *ParamStatement) QueryParams(ctx context.Context, values []Value) (*Que
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, err
 	}
+	c.trace("sql (params): %s", ps.sql)
 	sqldta, ext, err := c.encodeSQLDTA(ps.Params, values)
 	if err != nil {
 		return nil, err
