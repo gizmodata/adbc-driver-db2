@@ -1,0 +1,80 @@
+[project]
+name = "adbc-driver-db2"
+description = "A pure-Go Apache Arrow ADBC driver for IBM Db2 (DRDA wire protocol; no IBM CLI needed)."
+authors = [{ name = "GizmoData", email = "support@gizmodata.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = [
+    "adbc",
+    "adbc-driver",
+    "apache-arrow",
+    "arrow",
+    "columnar",
+    "database",
+    "db2",
+    "drda",
+    "ibm",
+    "gizmodata",
+    "oltp",
+    "pyarrow",
+    "ibm-db2",
+    "sql",
+]
+dependencies = [
+    # >=1.11.0 for driver-manifest + connection-profile resolution
+    # (profile=..., uri="profile://...", quack:// scheme lookup).
+    "adbc-driver-manager >=1.11.0",
+    "importlib-resources >=1.3",
+    # pyarrow is required for any DBAPI cursor method that returns
+    # Arrow data (fetch_arrow_table, fetch_record_batch, etc.) — i.e.
+    # every quickstart example in the README. Real dep, not optional.
+    "pyarrow >=14.0.1",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+]
+
+[project.optional-dependencies]
+dbapi = ["pandas"]
+test = ["pandas", "pytest >=7"]
+# Db2 -> GizmoSQL streaming-ingest integration test (Ethan's notebook flow).
+gizmosql = ["adbc-driver-gizmosql >=2.0"]
+
+[project.urls]
+homepage = "https://github.com/gizmodata/adbc-driver-db2"
+repository = "https://github.com/gizmodata/adbc-driver-db2"
+issues = "https://github.com/gizmodata/adbc-driver-db2/issues"
+
+[build-system]
+requires = ["setuptools >= 77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+# Python sources live under python/ so the repo can be polyglot (Go at
+# the root, Python here, cgo wrapper in pkg/quack/). Be explicit about
+# what we package — auto-find would also sweep up python/tests/.
+packages = ["adbc_driver_db2"]
+package-dir = { "" = "python" }
+
+[tool.pytest.ini_options]
+xfail_strict = true
+testpaths = ["python/tests"]
+markers = [
+    "integration: requires a live Db2 (DB2_HOST etc.; see python/tests/conftest.py)",
+    "gizmosql: additionally requires a live GizmoSQL (GIZMOSQL_URI / GIZMOSQL_TOKEN)",
+]

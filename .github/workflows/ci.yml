@@ -1,0 +1,239 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# ┌─ go-test (unit, 3 OS) ─┐
+# ├─ go-integration (Db2) ─┼─> wheels ──> publish (PyPI) / github-release
+# └─ python-test (Db2+GizmoSQL)
+#
+# Db2 only ships as a linux/amd64 container, so integration jobs run on
+# ubuntu; macOS/Windows run the hermetic unit tests and build wheels.
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  go-test:
+    name: Go unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - run: go vet ./...
+      - run: go test -race -timeout 5m ./...
+
+  go-integration:
+    name: Go integration + ADBC conformance (Db2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Start Db2
+        run: |
+          docker run -d --name db2 --privileged=true -p 50000:50000 \
+            -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb \
+            icr.io/db2_community/db2
+      - name: Build driver (while Db2 initialises)
+        run: go build ./... && go test -c -o /dev/null ./driver/db2
+      - name: Wait for Db2
+        timeout-minutes: 15
+        run: |
+          for i in $(seq 1 180); do
+            if docker logs db2 2>&1 | grep -q "Setup has completed"; then exit 0; fi
+            sleep 5
+          done
+          docker logs db2 | tail -50; exit 1
+      - name: Go integration tests
+        env:
+          DB2_HOST: localhost
+          DB2_PORT: '50000'
+        run: go test -timeout 20m -count=1 ./...
+
+  python-test:
+    name: Python tests (Db2 + GizmoSQL, py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Start Db2 and GizmoSQL
+        run: |
+          docker run -d --name db2 --privileged=true -p 50000:50000 \
+            -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb \
+            icr.io/db2_community/db2
+          docker run -d --name gizmosql --init -p 31337:31337 \
+            -e TLS_ENABLED=0 -e GIZMOSQL_PASSWORD=gizmosql_password \
+            gizmodata/gizmosql:latest
+      - name: Build c-shared driver library
+        run: |
+          go build -buildmode=c-shared -tags driverlib \
+            -o pkg/db2/libadbc_driver_db2.so ./pkg/db2
+          echo "ADBC_DB2_LIBRARY=$PWD/pkg/db2/libadbc_driver_db2.so" >> "$GITHUB_ENV"
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,gizmosql]"
+      - name: Wait for Db2
+        timeout-minutes: 15
+        run: |
+          for i in $(seq 1 180); do
+            if docker logs db2 2>&1 | grep -q "Setup has completed"; then exit 0; fi
+            sleep 5
+          done
+          docker logs db2 | tail -50; exit 1
+      - name: Run pytest
+        env:
+          DB2_HOST: localhost
+          DB2_PORT: '50000'
+          GIZMOSQL_URI: gizmosql://localhost:31337?transport=tcp
+          GIZMOSQL_PASSWORD: gizmosql_password
+        run: pytest -v
+
+  wheels:
+    name: Wheel ${{ matrix.os }} ${{ matrix.arch }}
+    needs: [go-test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,   arch: x86_64, runner: ubuntu-latest,    goos: linux,   goarch: amd64, ext: so }
+          - { os: linux,   arch: arm64,  runner: ubuntu-24.04-arm, goos: linux,   goarch: arm64, ext: so }
+          - { os: macos,   arch: arm64,  runner: macos-latest,     goos: darwin,  goarch: arm64, ext: dylib }
+          - { os: windows, arch: x86_64, runner: windows-latest,   goos: windows, goarch: amd64, ext: dll }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Build c-shared driver library
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          go build -buildmode=c-shared -tags driverlib \
+            -o "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}" ./pkg/db2
+          LIB="$PWD/pkg/db2/libadbc_driver_db2.${{ matrix.ext }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then LIB=$(cygpath -m "$LIB"); fi
+          echo "ADBC_DB2_LIBRARY=$LIB" >> "$GITHUB_ENV"
+      - name: Build wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+          ls -la dist/
+      - name: Smoke-import wheel in a clean venv
+        shell: bash
+        run: |
+          set -e
+          VENV="${RUNNER_TEMP}/wheel-venv"
+          python -m venv "$VENV"
+          if [ "${{ runner.os }}" = "Windows" ]; then VPY="$VENV/Scripts/python.exe"; else VPY="$VENV/bin/python"; fi
+          "$VPY" -m pip install --quiet dist/*.whl
+          "$VPY" -c "import adbc_driver_db2, adbc_driver_db2.dbapi; print(adbc_driver_db2._driver_path())"
+          "$VPY" -m adbc_driver_db2 install-manifest --dir "$RUNNER_TEMP/manifest"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.whl
+      - name: Stage c-shared library + checksum
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          base="libadbc_driver_db2-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
+          cp "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}" "release-artifacts/${base}"
+          if command -v sha256sum >/dev/null 2>&1; then (cd release-artifacts && sha256sum "${base}" > "${base}.sha256");
+          else (cd release-artifacts && shasum -a 256 "${base}" > "${base}.sha256"); fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: libadbc_driver_db2-release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release-artifacts/*
+
+  publish:
+    name: Publish to PyPI
+    needs: [wheels, go-integration, python-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/adbc-driver-db2
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - run: |
+          mkdir -p dist
+          find artifacts -type d -name 'wheel-*' -exec cp -r {}/. dist/ \;
+          ls -la dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+  github-release:
+    name: GitHub Release
+    needs: [wheels, go-integration, python-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="${VERSION}" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          cat release_notes.md
+      - name: Stage c-shared library bundle
+        run: |
+          mkdir -p release-bundle
+          find artifacts -type d -name 'libadbc_driver_db2-release-*' -exec cp -r {}/. release-bundle/ \;
+          (cd release-bundle && find . -type f -name 'libadbc_driver_db2-*' ! -name '*.sha256' -exec sha256sum {} \; > SHA256SUMS)
+          ls -la release-bundle/
+      - uses: softprops/action-gh-release@v3
+        with:
+          body_path: release_notes.md
+          files: |
+            release-bundle/libadbc_driver_db2-*
+            release-bundle/SHA256SUMS
+          generate_release_notes: true
