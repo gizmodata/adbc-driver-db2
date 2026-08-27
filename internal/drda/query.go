@@ -2,6 +2,7 @@ package drda
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -155,9 +156,7 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 				return err
 			}
 			if ca.IsError() {
-				if firstErr == nil {
-					firstErr = ca
-				}
+				firstErr = preferSQLCA(firstErr, ca)
 				continue
 			}
 			if ca.IsWarning() {
@@ -231,9 +230,7 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 				continue
 			}
 			if ca.IsError() {
-				if firstErr == nil {
-					firstErr = ca
-				}
+				firstErr = preferSQLCA(firstErr, ca)
 			} else if ca.SQLCode != 0 {
 				q.Warnings = append(q.Warnings, ca)
 				if ca.SQLCode == 100 {
@@ -242,8 +239,8 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 			}
 		case ddm.SQLERRRM, ddm.ENDUOWRM:
 		default:
-			if err := c.replyError(d); err != nil && firstErr == nil {
-				firstErr = err
+			if err := c.replyError(d); err != nil {
+				firstErr = preferSQLCA(firstErr, err)
 			}
 		}
 	}
@@ -253,6 +250,19 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 	}
 	q.resolveLOBs()
 	return nil
+}
+
+// preferSQLCA keeps an SQLCA error over a generic reply-message error
+// (e.g. OPNQFLRM), since the SQLCA carries the SQLCODE and message text.
+func preferSQLCA(current, candidate error) error {
+	if current == nil {
+		return candidate
+	}
+	var ca *SQLCA
+	if errors.As(candidate, &ca) && !errors.As(current, &ca) {
+		return candidate
+	}
+	return current
 }
 
 // resolveLOBs substitutes EXTDTA payloads for LobRef placeholders in

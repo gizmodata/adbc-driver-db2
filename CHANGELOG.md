@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-27
+
+### Fixed
+- Queries opened cursors on package section 65, which is not bound as a
+  cursor; Db2 for i refuses that with OPNQFLRM ("open query failure"). All
+  statements now use section 1 (a WITH HOLD cursor section in SYSSH200).
+- When a reply message such as OPNQFLRM is accompanied by an SQLCA, the
+  SQLCA's SQLCODE / message is reported instead of the bare reply code.
+
 ## [0.1.4] - 2026-08-27
 
 ### Added

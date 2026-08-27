@@ -99,14 +99,18 @@ type Conn struct {
 	TraceHex bool
 }
 
-// Package identity used for dynamic SQL. NULLID.SYSSHxyy are the CLI
-// packages shipped with every Db2; section numbers within them are
-// reused per statement. SYSSH200 = "small package, isolation CS, with
-// hold". Section 65 is what pydrda / the C-Common client use.
+// Package identity used for dynamic SQL. NULLID.SYSSHxyy are the CLI/JCC
+// packages shipped with Db2 LUW (and bound on demand elsewhere, see
+// bind.go). SYSSH200 = "small package, isolation CS, with hold": its odd
+// sections 1..63 are bound as WITH HOLD cursor declarations, which is
+// what OPNQRY needs — Db2 for i refuses to open a cursor on a section
+// that was not bound as one (OPNQFLRM), so section 1 is used for
+// everything. One section suffices because this driver runs a single
+// statement per connection at a time.
 const (
 	defaultPkgID     = "SYSSH200"
 	defaultPkgCnsTkn = "SYSLVL01"
-	defaultPkgSN     = 65
+	defaultPkgSN     = 1
 	defaultQryBlkSz  = 1 << 20
 
 	// prdid identifies us to the server as a DRDA level 11.5 client.
