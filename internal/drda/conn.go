@@ -268,7 +268,7 @@ func (c *Conn) isErrorReply(d *ddm.DSS) bool {
 		ca, err := ParseSQLCARD(d.Payload, c.Server.LittleEndian)
 		return err == nil && ca.IsError()
 	case ddm.SQLDARD:
-		ca, _, err := ParseSQLDARD(d.Payload, c.Server.LittleEndian)
+		ca, _, err := ParseSQLDARDVariant(d.Payload, c.Server.LittleEndian, c.sqldaVariant(), c.Server.CCSIDSBC)
 		return err == nil && ca.IsError()
 	case ddm.SQLERRRM, ddm.BGNBNDRM, ddm.PKGBNARM, ddm.PKGBPARM, ddm.CMDCHKRM, ddm.SYNTAXRM,
 		ddm.PRCCNVRM, ddm.CMDNSPRM, ddm.OBJNSPRM, ddm.PRMNSPRM, ddm.VALNSPRM, ddm.RDBNFNRM,
@@ -1026,7 +1026,7 @@ func (c *Conn) describeLocked(ctx context.Context, sql string) (cols, params []C
 	for _, d := range replies {
 		switch d.CodePoint {
 		case ddm.SQLDARD:
-			ca, desc, perr := ParseSQLDARD(d.Payload, c.Server.LittleEndian)
+			ca, desc, perr := ParseSQLDARDVariant(d.Payload, c.Server.LittleEndian, c.sqldaVariant(), c.Server.CCSIDSBC)
 			if perr != nil {
 				return nil, nil, perr
 			}
@@ -1089,3 +1089,6 @@ func pickSecMec(offered []uint16) uint16 {
 
 // Database returns the RDB name this connection is attached to.
 func (c *Conn) Database() string { return c.rdbnam }
+
+// sqldaVariant is the SQLDAGRP layout used by this server.
+func (c *Conn) sqldaVariant() SQLDAVariant { return sqldaVariantFor(c.Server.ProductID) }

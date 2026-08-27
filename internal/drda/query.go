@@ -150,7 +150,7 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 	for _, d := range replies {
 		switch d.CodePoint {
 		case ddm.SQLDARD:
-			ca, cols, err := ParseSQLDARD(d.Payload, c.Server.LittleEndian)
+			ca, cols, err := ParseSQLDARDVariant(d.Payload, c.Server.LittleEndian, c.sqldaVariant(), c.Server.CCSIDSBC)
 			if err != nil {
 				return err
 			}

@@ -23,6 +23,21 @@ func TestReplayCapturedQuery(t *testing.T) {
 		require.NoError(t, err)
 		return raw
 	}
+	if b, err := os.ReadFile(dir + "/SQLDARD.hex"); err == nil {
+		raw, _ := hex.DecodeString(strings.ReplaceAll(strings.TrimSpace(string(b)), " ", ""))
+		variant := SQLDAIBMi
+		if os.Getenv("REPLAY_LE") == "1" {
+			variant = SQLDALUW
+		}
+		ca, cols, err := ParseSQLDARDVariant(raw, os.Getenv("REPLAY_LE") == "1", variant, 37)
+		require.NoError(t, err)
+		t.Logf("sqldard: ca=%v columns=%d", ca, len(cols))
+		for i, col := range cols {
+			if i < 12 || i >= len(cols)-2 {
+				t.Logf("  col %d %+v", i, col)
+			}
+		}
+	}
 	fields, err := ParseQRYDSC(load("QRYDSC"))
 	require.NoError(t, err)
 	t.Logf("fields: %d", len(fields))

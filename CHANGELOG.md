@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-27
+
+### Fixed
+- Db2 for i result descriptors (SQLDARD) were parsed as having no columns,
+  which produced an empty Arrow table (0.1.8: a "descriptor mismatch"
+  error). The SQLDA layout is now selected per server product: Db2 for i
+  sends a null SQLCA, a populated SQLDHGRP with six additional bytes, eight
+  (not ten) bytes after SQLCCSID, and two (not three) trailing group
+  indicators. Verified against a captured V7R5 trace (108 columns).
+
 ## [0.1.8] - 2026-08-27
 
 ### Fixed

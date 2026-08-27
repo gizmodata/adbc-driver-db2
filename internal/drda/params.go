@@ -654,7 +654,7 @@ func (ps *ParamStatement) ExecBatch(ctx context.Context, rows [][]Value) (int64,
 				total += ca.RowCount()
 			}
 		case ddm.SQLDARD:
-			ca, _, perr := ParseSQLDARD(d.Payload, c.Server.LittleEndian)
+			ca, _, perr := ParseSQLDARDVariant(d.Payload, c.Server.LittleEndian, c.sqldaVariant(), c.Server.CCSIDSBC)
 			if perr != nil {
 				return 0, perr
 			}
