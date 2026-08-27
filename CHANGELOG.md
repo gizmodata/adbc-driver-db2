@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-27
+
+### Fixed
+- Servers that do not accept `CCSIDMGR 1208` (Db2 for i / z/OS) read the
+  package name in EBCDIC; the driver kept sending it as ASCII, so every
+  statement failed with SQL0805N (package `NULLID.SYSSH200` not found, with
+  garbled tokens). The driver now honours the server's EXCSATRD answer and
+  encodes `PKGNAMCSN` in EBCDIC when 1208 is not granted.
+
 ## [0.1.2] - 2026-08-26
 
 ### Added

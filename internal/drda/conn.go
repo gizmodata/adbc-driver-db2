@@ -78,6 +78,10 @@ type Conn struct {
 
 	mu     sync.Mutex
 	closed bool
+	// ddmUTF8 is true once the server has agreed to CCSIDMGR 1208, i.e.
+	// DDM-level character parameters (PKGNAMCSN, ...) are UTF-8 rather
+	// than EBCDIC. Db2 LUW agrees; Db2 for i / z/OS may not.
+	ddmUTF8 bool
 	// openQuery tracks an OPNQRY whose ENDQRYRM has not arrived yet.
 	openQuery *Query
 	// Trace, when non-nil, receives one line per DSS sent/received.
@@ -377,6 +381,10 @@ func (c *Conn) postConnect(ctx context.Context) error {
 	}
 	for _, d := range replies {
 		if d.CodePoint == ddm.EXCSATRD {
+			c.ddmUTF8 = excsatrdAgreesCCSID1208(d.Payload)
+			if !c.ddmUTF8 {
+				c.trace("server did not accept CCSIDMGR 1208; DDM character parameters stay EBCDIC")
+			}
 			continue
 		}
 		if err := c.replyError(d); err != nil {
@@ -546,15 +554,41 @@ func (c *Conn) packACCRDB() ddm.Object {
 	return ddm.NewObject(ddm.ACCRDB, body)
 }
 
-// packPKGNAMCSN encodes RDBNAM(18) + RDBCOLID(18) + PKGID(18) + PKGCNSTKN(8) + PKGSN(2).
+// packPKGNAMCSN encodes RDBNAM(18) + RDBCOLID(18) + PKGID(18) + PKGCNSTKN(8) + PKGSN(2)
+// in the DDM character encoding negotiated with the server.
 func (c *Conn) packPKGNAMCSN(section uint16) []byte {
+	pad := ddm.PadEBCDIC
+	if c.ddmUTF8 {
+		pad = ddm.PadASCII
+	}
 	b := make([]byte, 0, 64)
-	b = append(b, ddm.PadASCII(c.rdbnam, 18)...)
-	b = append(b, ddm.PadASCII("NULLID", 18)...)
-	b = append(b, ddm.PadASCII(c.pkgID, 18)...)
-	b = append(b, ddm.PadASCII(c.pkgCnsTkn, 8)...)
+	b = append(b, pad(c.rdbnam, 18)...)
+	b = append(b, pad("NULLID", 18)...)
+	b = append(b, pad(c.pkgID, 18)...)
+	b = append(b, pad(c.pkgCnsTkn, 8)...)
 	b = append(b, byte(section>>8), byte(section))
 	return ddm.Bytes(ddm.PKGNAMCSN, b)
+}
+
+// excsatrdAgreesCCSID1208 reports whether an EXCSATRD's MGRLVLLS lists
+// CCSIDMGR at level 1208.
+func excsatrdAgreesCCSID1208(body []byte) bool {
+	p, err := ddm.ParseParams(body)
+	if err != nil {
+		return false
+	}
+	ls, ok := p.Map[ddm.MGRLVLLS]
+	if !ok {
+		return false
+	}
+	for i := 0; i+4 <= len(ls); i += 4 {
+		mgr := ddm.CodePoint(uint16(ls[i])<<8 | uint16(ls[i+1]))
+		lvl := uint16(ls[i+2])<<8 | uint16(ls[i+3])
+		if mgr == ddm.CCSIDMGR && lvl == 1208 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Conn) packSQLSTT(sql string) ddm.Object {

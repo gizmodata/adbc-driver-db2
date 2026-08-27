@@ -55,3 +55,12 @@ func TestParseSQLCARD_EBCDIC(t *testing.T) {
 		require.Less(t, c, rune(0x80))
 	}
 }
+
+func TestExcsatrdAgreesCCSID1208(t *testing.T) {
+	// Db2 LUW's reply: MGRLVLLS with CCSIDMGR 1208.
+	require.True(t, excsatrdAgreesCCSID1208([]byte{0x00, 0x08, 0x14, 0x04, 0x14, 0xCC, 0x04, 0xB8}))
+	// A server answering with a lower CCSIDMGR level, or none.
+	require.False(t, excsatrdAgreesCCSID1208([]byte{0x00, 0x08, 0x14, 0x04, 0x14, 0xCC, 0x00, 0x01}))
+	require.False(t, excsatrdAgreesCCSID1208([]byte{0x00, 0x08, 0x14, 0x04, 0x14, 0x03, 0x00, 0x0A}))
+	require.False(t, excsatrdAgreesCCSID1208(nil))
+}
