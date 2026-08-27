@@ -25,11 +25,14 @@ cmd/drda-sniff  decoding TCP proxy for protocol debugging
 
 ## Reference material (not in repo)
 
-`~/LocalOnly/git/db2-ref/`: Apache Derby (client `org.apache.derby.client.net`
-and server `impl/drda` — the most complete open DRDA implementation),
-`pydrda` (small Python Db2 client), IBM JCC jar + `Probe.java` (run real
-IBM traffic through `cmd/drda-sniff` to see what Db2 expects). The Open
-Group publishes the DRDA V5 spec (free registration).
+The DRDA V5 specification, published openly by The Open Group (free
+registration), is the authoritative protocol reference. Openly-licensed
+implementations fill in the detail: Apache Derby (client
+`org.apache.derby.client.net` and server `impl/drda` — the most complete
+open DRDA implementation) and `pydrda` (a small Python Db2 client), both
+under `~/LocalOnly/git/db2-ref/`. `cmd/drda-sniff` is a decoding TCP proxy
+used to inspect this driver's own DRDA exchanges against a Db2 server while
+debugging.
 
 ## Testing
 
