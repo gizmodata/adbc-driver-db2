@@ -99,10 +99,9 @@ func ParseSQLDARDVariant(body []byte, littleEndian bool, variant SQLDAVariant, s
 // public DRDA text does not describe the eight bytes after SQLCCSID):
 //
 //	SQLPRECISION I2, SQLSCALE I2, SQLLENGTH I8, SQLTYPE I2, SQLCCSID I2 (BE)
-//	8 bytes (zero)
+//	8 bytes (zero) on Db2 for i, 10 on Db2 LUW
 //	SQLDOPTGRP indicator (0xFF = absent; LUW uses 0x08 on character columns)
 //	  SQLUNNAMED I2, SQLNAME (VCM,VCS), SQLLABEL (VCM,VCS), SQLCOMMENTS (VCM,VCS)
-//	  LUW only: 2 bytes
 //	SQLUDTGRP indicator (+ type name, class name pairs when present)
 //	SQLDXGRP indicator (+ key/updatable/generated/parmmode, rdbnam, 4 pairs)
 //	LUW only: one more nullable group indicator
@@ -113,7 +112,11 @@ func parseSQLDAGRP(r *byteReader, variant SQLDAVariant) ColumnDesc {
 	c.Length = int64(r.u64())
 	c.SQLType = r.u16()
 	c.CCSID = r.u16BE() // always big-endian
-	_ = r.take(8)
+	if variant == SQLDALUW {
+		_ = r.take(10)
+	} else {
+		_ = r.take(8)
+	}
 	// SQLDOPTGRP
 	if r.u8() != 0xFF {
 		_ = r.u16() // SQLUNNAMED (1 = expression column; SQLNAME is then the ordinal)
@@ -122,9 +125,6 @@ func parseSQLDAGRP(r *byteReader, variant SQLDAVariant) ColumnDesc {
 		_ = r.vcmOrVcs() // SQLCOMMENTS
 		if c.Name == "" {
 			c.Name = c.Label
-		}
-		if variant == SQLDALUW {
-			_ = r.take(2)
 		}
 		// SQLUDTGRP
 		if r.u8() != 0xFF {
