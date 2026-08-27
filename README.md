@@ -71,7 +71,8 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 | `connect_timeout=30` / `adbc.db2.connect_timeout` | Seconds or Go duration |
 | `application_name=X` / `adbc.db2.application_name` | Reported to the server |
 | `package=COLL.PKG` / `adbc.db2.package` | Dynamic-SQL package (default `NULLID.SYSSH200`); bound automatically if missing (`adbc.db2.no_auto_bind=true` disables) |
-| `adbc.db2.trace=true` | Log every DRDA message to stderr |
+| `trace=true|hex` / `adbc.db2.trace` | Log every DRDA message (`hex` adds payload dumps) |
+| `trace_file=/path` / `adbc.db2.trace_file` | Write the trace to a file instead of stderr (use from notebooks) |
 
 Standard ADBC options also apply: `username`, `password`,
 `adbc.connection.autocommit`, `adbc.connection.transaction.isolation_level`

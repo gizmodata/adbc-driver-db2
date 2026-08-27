@@ -52,8 +52,12 @@ const (
 	OptionApplicationName = "adbc.db2.application_name"
 	// OptionBatchSize caps rows per Arrow record batch (default 65536).
 	OptionBatchSize = "adbc.db2.batch_size"
-	// OptionTrace: "true" logs DRDA traffic to stderr.
-	OptionTrace = "adbc.db2.trace"
+	// OptionTrace: "true" logs DRDA traffic (one line per message plus the
+	// SQL text); "hex" additionally dumps reply payloads. Goes to stderr
+	// unless OptionTraceFile names a file (appended to) — use that from
+	// notebooks, whose cells do not show the process's stderr.
+	OptionTrace     = "adbc.db2.trace"
+	OptionTraceFile = "adbc.db2.trace_file"
 	// OptionPackage names the dynamic-SQL package as COLLECTION.PKGID
 	// (default NULLID.SYSSH200). If the package does not exist on the
 	// server (SQL0805N — typical on Db2 for i / z/OS, which do not ship
@@ -70,6 +74,8 @@ type connConfig struct {
 	drda      drda.Config
 	batchSize int
 	trace     bool
+	traceHex  bool
+	traceFile string
 }
 
 // parseOptions merges the URI and explicit ADBC options into a config.
@@ -154,6 +160,12 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 					return nil, errStatus(adbc.StatusInvalidArgument, "db2: package must be COLLECTION.PKGID, got %q", v)
 				}
 				cfg.drda.PackageCollection, cfg.drda.PackageID = coll, pkg
+			case "trace":
+				cfg.trace = isTrue(v) || strings.EqualFold(v, "hex")
+				cfg.traceHex = strings.EqualFold(v, "hex")
+			case "trace_file":
+				cfg.traceFile = v
+				cfg.trace = true
 			case "batch_size":
 				n, err := strconv.Atoi(v)
 				if err != nil || n <= 0 {
@@ -222,7 +234,11 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			}
 			cfg.batchSize = n
 		case OptionTrace:
-			cfg.trace = isTrue(v)
+			cfg.trace = isTrue(v) || strings.EqualFold(v, "hex")
+			cfg.traceHex = strings.EqualFold(v, "hex")
+		case OptionTraceFile:
+			cfg.traceFile = v
+			cfg.trace = true
 		case OptionPackage:
 			coll, pkg, ok := strings.Cut(v, ".")
 			if !ok || coll == "" || pkg == "" {

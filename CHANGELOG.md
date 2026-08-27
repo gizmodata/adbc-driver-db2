@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-27
+
+### Added
+- `adbc.db2.trace_file` (also `?trace_file=`) writes the DRDA trace to a
+  file, and `adbc.db2.trace=hex` dumps reply payloads — for diagnosing a
+  server from a notebook, where the process's stderr is not visible. The
+  trace now also records the driver version, server attributes, and the
+  row count decoded from each query block.
+
+### Changed
+- A `CNTQRY` reply carrying neither rows nor `ENDQRYRM` is retried a few
+  times before the result set is treated as exhausted.
+
 ## [0.1.6] - 2026-08-27
 
 ### Added

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -70,8 +72,27 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		return nil, fromDRDAError(err)
 	}
 	if cfg.trace {
+		var w io.Writer = os.Stderr
+		var closer io.Closer
+		if cfg.traceFile != "" {
+			f, err := os.OpenFile(cfg.traceFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			if err != nil {
+				conn.Close()
+				return nil, errStatus(adbc.StatusInvalidArgument, "db2: open trace file: %v", err)
+			}
+			w, closer = f, f
+		}
+		var mu sync.Mutex
 		conn.Trace = func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, "[adbc-db2] "+format+"\n", args...)
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(w, "[adbc-db2 %s] "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+		}
+		conn.TraceHex = cfg.traceHex
+		conn.Trace("driver %s connected: server=%+v", driverVersion(), conn.Server)
+		if closer != nil {
+			c := &connectionImpl{db: d, conn: conn, alloc: d.alloc, cfg: cfg, autoCommit: true, traceCloser: closer}
+			return c, nil
 		}
 	}
 	return &connectionImpl{
@@ -93,13 +114,14 @@ func (d *databaseImpl) Close() error { return nil }
 // consumed or released — mirroring what JCC/CLI do. With autocommit
 // off, nothing is committed until Commit/Rollback.
 type connectionImpl struct {
-	db         *databaseImpl
-	conn       *drda.Conn
-	alloc      memory.Allocator
-	cfg        *connConfig
-	autoCommit bool
-	mu         sync.Mutex
-	closed     bool
+	db          *databaseImpl
+	conn        *drda.Conn
+	alloc       memory.Allocator
+	cfg         *connConfig
+	autoCommit  bool
+	mu          sync.Mutex
+	closed      bool
+	traceCloser io.Closer
 }
 
 func (c *connectionImpl) Close() error {
@@ -114,7 +136,11 @@ func (c *connectionImpl) Close() error {
 	if !c.autoCommit {
 		_ = c.conn.Rollback(context.Background())
 	}
-	return c.conn.Close()
+	err := c.conn.Close()
+	if c.traceCloser != nil {
+		_ = c.traceCloser.Close()
+	}
+	return err
 }
 
 func (c *connectionImpl) NewStatement() (adbc.Statement, error) {

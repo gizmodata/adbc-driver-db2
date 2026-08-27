@@ -202,6 +202,7 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 			if len(leftover) > 0 {
 				q.partial = append([]byte(nil), leftover...)
 			}
+			c.trace("QRYDTA: %d bytes -> %d rows so far, %d bytes carried over", len(payload), len(q.pending), len(leftover))
 			if ca != nil {
 				if ca.IsError() {
 					if firstErr == nil {
@@ -316,22 +317,30 @@ func (q *Query) Next(ctx context.Context) ([][]Value, error) {
 	c := q.conn
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.send(ctx, c.packCNTQRY(c.pkgSN, q.qryinsid), q.corr, false, true)
-	if err := c.flush(ctx); err != nil {
-		return nil, err
-	}
-	replies, err := c.readChain(ctx, q.corr)
-	if err != nil {
-		return nil, err
-	}
-	if err := q.consume(replies); err != nil {
-		return nil, err
+	// A block without rows and without ENDQRYRM is unusual; ask again a
+	// few times (some servers answer the first CNTQRY with metadata only)
+	// before treating it as the end.
+	for attempt := 0; attempt < 3; attempt++ {
+		c.send(ctx, c.packCNTQRY(c.pkgSN, q.qryinsid), q.corr, false, true)
+		if err := c.flush(ctx); err != nil {
+			return nil, err
+		}
+		replies, err := c.readChain(ctx, q.corr)
+		if err != nil {
+			return nil, err
+		}
+		if err := q.consume(replies); err != nil {
+			return nil, err
+		}
+		if len(q.pending) > 0 || q.done {
+			break
+		}
+		c.trace("CNTQRY returned no rows and no ENDQRYRM (attempt %d)", attempt+1)
 	}
 	rows := q.pending
 	q.pending = nil
 	if len(rows) == 0 && !q.done {
-		// Server sent nothing but didn't end the query; treat as end to
-		// avoid spinning.
+		c.trace("giving up on query after empty CNTQRY replies")
 		q.done = true
 	}
 	return rows, nil
