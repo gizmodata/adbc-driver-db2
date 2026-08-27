@@ -45,8 +45,10 @@ func encodingFor(p ColumnDesc) (paramEncoding, error) {
 			return paramEncoding{drdaType: TypeNFloat4, length: 4}, nil
 		}
 		return paramEncoding{drdaType: TypeNFloat8, length: 8}, nil
-	case SQLTypeDecimal, SQLTypeNumeric:
+	case SQLTypeDecimal:
 		return paramEncoding{drdaType: TypeNDecimal, length: uint16(p.Precision)<<8 | uint16(p.Scale)}, nil
+	case SQLTypeNumeric, SQLTypeZoned:
+		return paramEncoding{drdaType: TypeNZDecimal, length: uint16(p.Precision)<<8 | uint16(p.Scale)}, nil
 	case SQLTypeDecFloat:
 		return paramEncoding{drdaType: TypeNDecFloat, length: uint16(p.Length)}, nil
 	case SQLTypeBoolean:
@@ -232,6 +234,12 @@ func (c *Conn) appendParam(dta []byte, e paramEncoding, p ColumnDesc, v Value) (
 			return nil, typeMismatch(v, "DECIMAL")
 		}
 		return appendPackedDecimal(dta, d, int(e.length>>8), int(e.length&0xFF))
+	case TypeNZDecimal:
+		d, ok := toDecimal(v)
+		if !ok {
+			return nil, typeMismatch(v, "NUMERIC")
+		}
+		return appendZonedDecimal(dta, d, int(e.length>>8), int(e.length&0xFF))
 	case TypeNDecFloat:
 		// Send DECFLOAT as its textual form via a character parameter is
 		// not possible here; encode as DPD.
@@ -517,6 +525,39 @@ func appendPackedDecimal(dta []byte, d Decimal, precision, scale int) ([]byte, e
 	}
 	for i := 0; i < len(nibbles); i += 2 {
 		dta = append(dta, nibbles[i]<<4|nibbles[i+1])
+	}
+	return dta, nil
+}
+
+// appendZonedDecimal encodes d as EBCDIC zoned decimal (digits F0-F9,
+// sign in the last byte's zone: C positive, D negative).
+func appendZonedDecimal(dta []byte, d Decimal, precision, scale int) ([]byte, error) {
+	n := new(big.Int).Set(d.Unscaled)
+	switch {
+	case int(d.Scale) < scale:
+		n.Mul(n, new(big.Int).Exp(bigTen, big.NewInt(int64(scale-int(d.Scale))), nil))
+	case int(d.Scale) > scale:
+		n.Quo(n, new(big.Int).Exp(bigTen, big.NewInt(int64(int(d.Scale)-scale)), nil))
+	}
+	neg := n.Sign() < 0
+	n.Abs(n)
+	digits := n.String()
+	if len(digits) > precision {
+		return nil, fmt.Errorf("decimal %s does not fit NUMERIC(%d,%d)", d, precision, scale)
+	}
+	for len(digits) < precision {
+		digits = "0" + digits
+	}
+	for i := 0; i < len(digits); i++ {
+		zone := byte(0xF0)
+		if i == len(digits)-1 {
+			if neg {
+				zone = 0xD0
+			} else {
+				zone = 0xC0
+			}
+		}
+		dta = append(dta, zone|(digits[i]-'0'))
 	}
 	return dta, nil
 }

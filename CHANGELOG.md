@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-27
+
+### Added
+- Zoned decimal (`NUMERIC` on Db2 for i / z/OS, FD:OCA 0x10/0x11 and the
+  numeric-character form 0x12/0x13) decoding and parameter encoding; the
+  driver failed with "unsupported FD:OCA type 0x10" on such columns.
+- Null-terminated (CSTR / NTERMBYTE) and 1-byte-length (LSTR / PSCLBYTE)
+  string and byte forms.
+
 ## [0.1.5] - 2026-08-27
 
 ### Fixed

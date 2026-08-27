@@ -1,6 +1,7 @@
 package drda
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -175,6 +176,8 @@ func (d *RowDecoder) decodeField(r *byteReader, f FieldDesc) Value {
 		return false
 	case TypeDecimal:
 		return decodePackedDecimal(r, f.Precision(), f.Scale())
+	case TypeZDecimal, TypeNumericChar:
+		return decodeZonedDecimal(r, f.Precision(), f.Scale())
 	case TypeDecFloat:
 		dv, neg, special := decodeDecFloat(r.take(int(f.Length)))
 		switch special {
@@ -204,6 +207,26 @@ func (d *RowDecoder) decodeField(r *byteReader, f FieldDesc) Value {
 	case TypeVarGraph, TypeLongGraph:
 		n := int(r.u16BE())
 		return d.decodeText(r.take(2*n), f, false)
+	case TypeCStr, TypeCStrMix:
+		// Null-terminated string in a fixed-length field.
+		b := r.take(int(f.Length))
+		if i := bytes.IndexByte(b, 0); i >= 0 {
+			b = b[:i]
+		}
+		return d.decodeText(b, f, false)
+	case TypeNTermByte:
+		b := r.take(int(f.Length))
+		if i := bytes.IndexByte(b, 0); i >= 0 {
+			b = b[:i]
+		}
+		return cloneBytes(b)
+	case TypeLStr, TypeLStrMix:
+		// 1-byte length prefix.
+		n := int(r.u8())
+		return d.decodeText(r.take(n), f, false)
+	case TypePsclByte:
+		n := int(r.u8())
+		return cloneBytes(r.take(n))
 	case TypeFixByte, TypeFixBytes, TypeRowID:
 		return cloneBytes(r.take(int(f.Length & 0x7FFF)))
 	case TypeVarByte, TypeVarBinary:
@@ -305,6 +328,40 @@ func decodePackedDecimal(r *byteReader, precision, scale int) Value {
 		digits = append(digits, '0'+hi, '0'+lo)
 	}
 	return nil
+}
+
+// decodeZonedDecimal decodes a zoned (one digit per byte) decimal as
+// sent by Db2 for i / z/OS: EBCDIC digits F0-F9 (or ASCII 30-39) whose
+// last byte's zone nibble carries the sign (C/F/A/E positive, D/B
+// negative; in ASCII zoned form the negative digits are 0x70-0x79).
+func decodeZonedDecimal(r *byteReader, precision, scale int) Value {
+	b := r.take(precision)
+	if b == nil {
+		return nil
+	}
+	digits := make([]byte, 0, precision)
+	neg := false
+	for i, c := range b {
+		zone, digit := c>>4, c&0x0F
+		if i == len(b)-1 {
+			switch zone {
+			case 0xD, 0xB, 0x7:
+				neg = true
+			}
+		}
+		if digit > 9 {
+			digit = 0
+		}
+		digits = append(digits, '0'+digit)
+	}
+	v, ok := new(big.Int).SetString(strings.TrimLeft(string(digits), "0"), 10)
+	if !ok {
+		v = big.NewInt(0)
+	}
+	if neg {
+		v.Neg(v)
+	}
+	return Decimal{Unscaled: v, Scale: int32(scale)}
 }
 
 func parseDate(s string) Value {
