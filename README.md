@@ -189,8 +189,14 @@ SELECT o.ORDER_ID, c.name
 FROM db2.SALES.ORDERS o
 JOIN customers c ON c.id = o.CUST_ID;
 
--- materialise a copy
+-- materialise a local copy in DuckDB
 CREATE TABLE orders AS SELECT * FROM db2.SALES.ORDERS;
+
+-- push (the simple way): write straight into Db2 through the attached
+-- catalog with plain SQL — USE the Db2 schema, then CREATE TABLE ... AS
+USE db2.DB2INST1;
+CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.local_orders;   -- CTAS into Db2
+USE memory;
 ```
 
 For arbitrary Db2 SQL (or to push data the other way) the secret also
@@ -199,7 +205,17 @@ drives the function API:
 ```sql
 SET VARIABLE db2 = adbc_connect({'secret': 'db2_secret'});
 SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SYSCAT.TABLES FETCH FIRST 10 ROWS ONLY');
+SELECT * FROM adbc_insert(getvariable('db2')::BIGINT, 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
 ```
+
+Both write paths work: `USE <attached schema>; CREATE TABLE ... AS ...` (and
+`INSERT INTO ...`) through the attached catalog, or the `adbc_insert()`
+function for arbitrary relations.
+
+Credentials can live in a self-contained DuckDB secret (above) or in an ADBC
+connection profile — `adbc_scanner` resolves `profile://…` URIs too, so
+profiles are not specific to any one extension (the connection-profiles
+section below shows the profile setup).
 
 ### Query Db2 from DuckDB via connection profiles (Columnar's `adbc` extension)
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-08-27
+
+### Added
+
+- README + `test_adbc_scanner.py`: document and test writing back to Db2
+  through the attached catalog with plain SQL (`USE db2.<schema>;
+  CREATE TABLE ... AS SELECT`) and via the `adbc_insert()` function — both
+  verified against a live Db2 server.
+
 ## [0.1.10] - 2026-08-27
 
 ### Added
