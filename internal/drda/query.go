@@ -43,6 +43,14 @@ func (q *Query) IsResultSet() bool { return q.Result == nil }
 func (c *Conn) Query(ctx context.Context, sql string) (*Query, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	q, err := c.queryLocked(ctx, sql)
+	if err != nil && c.autoBind(ctx, err) {
+		q, err = c.queryLocked(ctx, sql)
+	}
+	return q, err
+}
+
+func (c *Conn) queryLocked(ctx context.Context, sql string) (*Query, error) {
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, err
 	}

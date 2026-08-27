@@ -70,6 +70,7 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 | `batch_size=N` / `adbc.db2.batch_size` | Max rows per Arrow record batch (default 65536) |
 | `connect_timeout=30` / `adbc.db2.connect_timeout` | Seconds or Go duration |
 | `application_name=X` / `adbc.db2.application_name` | Reported to the server |
+| `package=COLL.PKG` / `adbc.db2.package` | Dynamic-SQL package (default `NULLID.SYSSH200`); bound automatically if missing (`adbc.db2.no_auto_bind=true` disables) |
 | `adbc.db2.trace=true` | Log every DRDA message to stderr |
 
 Standard ADBC options also apply: `username`, `password`,

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-27
+
+### Added
+- Automatic package binding: when the dynamic-SQL package (default
+  `NULLID.SYSSH200`) does not exist on the server — the normal state on Db2
+  for i and Db2 for z/OS, which do not ship the CLI packages — the driver
+  binds it exactly as IBM's `DB2Binder` does (`BGNBND` / `BNDSQLSTT` /
+  `ENDBND`, 65 sections, WITH HOLD cursors) and retries. New options
+  `adbc.db2.package` (`COLLECTION.PKGID`, also `?package=` in the URI) and
+  `adbc.db2.no_auto_bind`.
+
+### Fixed
+- A failed command in a chained request (e.g. a prepare error) could leave
+  the driver waiting forever for replies the server never sends.
+- The package consistency token is sent as raw ASCII bytes (as JCC does)
+  even when the server keeps DDM names in EBCDIC.
+
 ## [0.1.3] - 2026-08-27
 
 ### Fixed

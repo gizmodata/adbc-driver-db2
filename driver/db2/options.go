@@ -54,6 +54,13 @@ const (
 	OptionBatchSize = "adbc.db2.batch_size"
 	// OptionTrace: "true" logs DRDA traffic to stderr.
 	OptionTrace = "adbc.db2.trace"
+	// OptionPackage names the dynamic-SQL package as COLLECTION.PKGID
+	// (default NULLID.SYSSH200). If the package does not exist on the
+	// server (SQL0805N — typical on Db2 for i / z/OS, which do not ship
+	// the CLI packages), the driver binds it the way IBM's DB2Binder
+	// does; OptionNoAutoBind ("true") disables that.
+	OptionPackage    = "adbc.db2.package"
+	OptionNoAutoBind = "adbc.db2.no_auto_bind"
 
 	OptionIngestTable = adbc.OptionKeyIngestTargetTable
 )
@@ -141,6 +148,12 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 				cfg.drda.ConnectTimeout = d
 			case "application_name", "applicationname", "clientapplicationinformation":
 				cfg.drda.ApplicationName = v
+			case "package":
+				coll, pkg, ok := strings.Cut(v, ".")
+				if !ok || coll == "" || pkg == "" {
+					return nil, errStatus(adbc.StatusInvalidArgument, "db2: package must be COLLECTION.PKGID, got %q", v)
+				}
+				cfg.drda.PackageCollection, cfg.drda.PackageID = coll, pkg
 			case "batch_size":
 				n, err := strconv.Atoi(v)
 				if err != nil || n <= 0 {
@@ -210,6 +223,14 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.batchSize = n
 		case OptionTrace:
 			cfg.trace = isTrue(v)
+		case OptionPackage:
+			coll, pkg, ok := strings.Cut(v, ".")
+			if !ok || coll == "" || pkg == "" {
+				return nil, errStatus(adbc.StatusInvalidArgument, "db2: %s must be COLLECTION.PKGID, got %q", k, v)
+			}
+			cfg.drda.PackageCollection, cfg.drda.PackageID = coll, pkg
+		case OptionNoAutoBind:
+			cfg.drda.NoAutoBind = isTrue(v)
 		default:
 			// Unknown options are ignored so generic tooling that sets
 			// e.g. adbc.connection.autocommit at the database level

@@ -44,6 +44,12 @@ type Config struct {
 	// CurrentSchema, when set, is applied via SET CURRENT SCHEMA after
 	// connecting.
 	CurrentSchema string
+	// PackageCollection / PackageID name the dynamic-SQL package
+	// (default NULLID.SYSSH200). NoAutoBind disables creating it on
+	// SQL0805N.
+	PackageCollection string
+	PackageID         string
+	NoAutoBind        bool
 }
 
 // ServerInfo carries attributes the server reported in EXCSATRD/ACCRDBRM.
@@ -70,11 +76,14 @@ type Conn struct {
 
 	Server ServerInfo
 
-	pkgID     string
-	pkgCnsTkn string
-	pkgSN     uint16
-	rdbnam    string // 18-char padded
-	qryBlkSz  uint32
+	pkgID         string
+	pkgCollection string
+	pkgCnsTkn     string
+	bindAttempted bool
+	bindError     error
+	pkgSN         uint16
+	rdbnam        string // 18-char padded
+	qryBlkSz      uint32
 
 	mu     sync.Mutex
 	closed bool
@@ -122,6 +131,12 @@ func dialTraced(ctx context.Context, cfg Config, trace func(string, ...any)) (*C
 	if cfg.ApplicationName == "" {
 		cfg.ApplicationName = "adbc-driver-db2"
 	}
+	if cfg.PackageID == "" {
+		cfg.PackageID = defaultPkgID
+	}
+	if cfg.PackageCollection == "" {
+		cfg.PackageCollection = "NULLID"
+	}
 	d := net.Dialer{Timeout: cfg.ConnectTimeout}
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.Port))
 	raw, err := d.DialContext(ctx, "tcp", addr)
@@ -145,15 +160,16 @@ func dialTraced(ctx context.Context, cfg Config, trace func(string, ...any)) (*C
 		raw = tconn
 	}
 	c := &Conn{
-		cfg:       cfg,
-		conn:      raw,
-		rd:        bufio.NewReaderSize(raw, 256*1024),
-		wr:        ddm.NewWriter(raw),
-		pkgID:     defaultPkgID,
-		pkgCnsTkn: defaultPkgCnsTkn,
-		pkgSN:     defaultPkgSN,
-		rdbnam:    strings.ToUpper(cfg.Database),
-		qryBlkSz:  cfg.QueryBlockSize,
+		cfg:           cfg,
+		conn:          raw,
+		rd:            bufio.NewReaderSize(raw, 256*1024),
+		wr:            ddm.NewWriter(raw),
+		pkgID:         strings.ToUpper(cfg.PackageID),
+		pkgCollection: strings.ToUpper(cfg.PackageCollection),
+		pkgCnsTkn:     defaultPkgCnsTkn,
+		pkgSN:         defaultPkgSN,
+		rdbnam:        strings.ToUpper(cfg.Database),
+		qryBlkSz:      cfg.QueryBlockSize,
 	}
 	c.Trace = trace
 	if err := c.handshake(ctx); err != nil {
@@ -214,16 +230,49 @@ func (c *Conn) readDSS(ctx context.Context) (*ddm.DSS, error) {
 // transmission, so "unchained" alone is not the end of the transmission.
 func (c *Conn) readChain(ctx context.Context, lastCorr uint16) ([]*ddm.DSS, error) {
 	var out []*ddm.DSS
+	sawError := false
 	for {
 		d, err := c.readDSS(ctx)
 		if err != nil {
 			return out, err
 		}
 		out = append(out, d)
-		if !d.Chained && d.CorrelationID >= lastCorr {
+		if c.isErrorReply(d) {
+			sawError = true
+		}
+		if d.Chained {
+			continue
+		}
+		// End of a chain. We are done when the reply belongs to the last
+		// request we sent — or when a command failed, in which case the
+		// server discards the remaining chained requests and sends
+		// nothing more for them.
+		if d.CorrelationID >= lastCorr || sawError {
 			return out, nil
 		}
 	}
+}
+
+// isErrorReply reports whether a reply DSS signals a failed command
+// (an SQLCARD with a negative SQLCODE, or an error reply message).
+func (c *Conn) isErrorReply(d *ddm.DSS) bool {
+	switch d.CodePoint {
+	case ddm.SQLCARD:
+		if len(d.Payload) > 0 && d.Payload[0] == 0xFF {
+			return false
+		}
+		ca, err := ParseSQLCARD(d.Payload, c.Server.LittleEndian)
+		return err == nil && ca.IsError()
+	case ddm.SQLDARD:
+		ca, _, err := ParseSQLDARD(d.Payload, c.Server.LittleEndian)
+		return err == nil && ca.IsError()
+	case ddm.SQLERRRM, ddm.BGNBNDRM, ddm.PKGBNARM, ddm.PKGBPARM, ddm.CMDCHKRM, ddm.SYNTAXRM,
+		ddm.PRCCNVRM, ddm.CMDNSPRM, ddm.OBJNSPRM, ddm.PRMNSPRM, ddm.VALNSPRM, ddm.RDBNFNRM,
+		ddm.RDBATHRM, ddm.RDBNACRM, ddm.RDBAFLRM, ddm.ABNUOWRM, ddm.QRYNOPRM, ddm.DTAMCHRM,
+		ddm.OPNQFLRM, ddm.AGNPRMRM, ddm.RSCLMTRM, ddm.MGRLVLRM, ddm.CMDATHRM:
+		return true
+	}
+	return false
 }
 
 // ---- handshake ----
@@ -563,9 +612,9 @@ func (c *Conn) packPKGNAMCSN(section uint16) []byte {
 	}
 	b := make([]byte, 0, 64)
 	b = append(b, pad(c.rdbnam, 18)...)
-	b = append(b, pad("NULLID", 18)...)
+	b = append(b, pad(c.pkgCollection, 18)...)
 	b = append(b, pad(c.pkgID, 18)...)
-	b = append(b, pad(c.pkgCnsTkn, 8)...)
+	b = append(b, ddm.PadASCII(c.pkgCnsTkn, 8)...) // opaque token; JCC sends it as ASCII bytes
 	b = append(b, byte(section>>8), byte(section))
 	return ddm.Bytes(ddm.PKGNAMCSN, b)
 }
@@ -805,6 +854,15 @@ func (c *Conn) replyError(d *ddm.DSS) error {
 			pe.Detail = "data descriptor mismatch"
 		case ddm.OPNQFLRM:
 			pe.Detail = "open query failure"
+		case ddm.BGNBNDRM:
+			pe.Detail = "begin bind error"
+			if cd, ok := p.Map[ddm.RSNCOD]; ok && len(cd) > 0 {
+				pe.Detail = fmt.Sprintf("begin bind error (reason 0x%02X)", cd[0])
+			}
+		case ddm.PKGBNARM:
+			pe.Detail = "package bind not active"
+		case ddm.PKGBPARM:
+			pe.Detail = "package bind process active"
 		}
 	}
 	return pe
@@ -823,6 +881,14 @@ type Result struct {
 func (c *Conn) ExecImmediate(ctx context.Context, sql string) (*Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	res, err := c.execImmediateLocked(ctx, sql)
+	if err != nil && c.autoBind(ctx, err) {
+		res, err = c.execImmediateLocked(ctx, sql)
+	}
+	return res, err
+}
+
+func (c *Conn) execImmediateLocked(ctx context.Context, sql string) (*Result, error) {
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, err
 	}
@@ -931,6 +997,14 @@ func (c *Conn) Close() error {
 func (c *Conn) Describe(ctx context.Context, sql string) (cols, params []ColumnDesc, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	cols, params, err = c.describeLocked(ctx, sql)
+	if err != nil && c.autoBind(ctx, err) {
+		cols, params, err = c.describeLocked(ctx, sql)
+	}
+	return cols, params, err
+}
+
+func (c *Conn) describeLocked(ctx context.Context, sql string) (cols, params []ColumnDesc, err error) {
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, nil, err
 	}
