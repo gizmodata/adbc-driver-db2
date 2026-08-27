@@ -390,6 +390,12 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		}
 		return rr, q.Result.RowsAffected, nil
 	}
+	if len(q.Columns) != len(q.Fields) {
+		_ = q.Close(ctx)
+		return nil, -1, errStatus(adbc.StatusInternal,
+			"db2: result descriptor mismatch: SQLDARD describes %d columns but QRYDSC has %d fields (please report with adbc.db2.trace=hex)",
+			len(q.Columns), len(q.Fields))
+	}
 	return newStreamingRecordReader(ctx, s.conn, q, s.conn.cfg.batchSize), -1, nil
 }
 

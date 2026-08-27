@@ -688,8 +688,7 @@ func (ps *ParamStatement) QueryParams(ctx context.Context, values []Value) (*Que
 	if err != nil {
 		return nil, err
 	}
-	q := &Query{conn: c}
-	q.decoder.LittleEndian = c.Server.LittleEndian
+	q := c.newQuery()
 	q.Columns = ps.Columns
 	c.send(ctx, c.packPRPSQLSTT(c.pkgSN), 1, true, false)
 	c.send(ctx, c.packSQLSTT(ps.sql), 1, false, false)

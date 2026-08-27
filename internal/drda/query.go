@@ -55,8 +55,7 @@ func (c *Conn) queryLocked(ctx context.Context, sql string) (*Query, error) {
 	if err := c.ensureNoOpenQuery(ctx); err != nil {
 		return nil, err
 	}
-	q := &Query{conn: c}
-	q.decoder.LittleEndian = c.Server.LittleEndian
+	q := c.newQuery()
 	c.trace("sql: %s", sql)
 
 	if looksLikeQuery(sql) {
@@ -164,6 +163,13 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 			}
 			if q.Columns == nil {
 				q.Columns = cols
+				names := make([]string, 0, len(cols))
+				for i, col := range cols {
+					if i < 12 {
+						names = append(names, col.Name)
+					}
+				}
+				c.trace("SQLDARD: %d columns (%v ...)", len(cols), names)
 			}
 		case ddm.OPNQRYRM:
 			q.opened = true
@@ -179,6 +185,7 @@ func (q *Query) consume(replies []*ddm.DSS) error {
 			}
 			q.Fields = fields
 			q.decoder.Fields = fields
+			c.trace("QRYDSC: %d fields", len(fields))
 		case ddm.QRYDTA:
 			if q.Fields == nil {
 				return fmt.Errorf("drda: QRYDTA before QRYDSC")
@@ -389,4 +396,15 @@ func (q *Query) closeLocked(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// newQuery creates a Query configured for this server's typedef
+// (endianness and character CCSIDs).
+func (c *Conn) newQuery() *Query {
+	q := &Query{conn: c}
+	q.decoder.LittleEndian = c.Server.LittleEndian
+	q.decoder.CCSIDSBC = c.Server.CCSIDSBC
+	q.decoder.CCSIDDBC = c.Server.CCSIDDBC
+	q.decoder.CCSIDMBC = c.Server.CCSIDMBC
+	return q
 }

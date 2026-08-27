@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gizmodata/adbc-driver-db2/internal/ddm"
 )
 
 // SQLCA is the parsed SQL communications area from a SQLCARD / SQLDARD.
@@ -50,6 +52,8 @@ type byteReader struct {
 	le  bool // numeric fields little-endian (QTDSQLX86)
 	// truncated is set when a read ran past the end of the buffer.
 	truncated bool
+	// sbc is the server's single-byte CCSID for VCS fields (0 = guess).
+	sbc uint16
 }
 
 func (r *byteReader) fail(format string, args ...any) {
@@ -131,7 +135,11 @@ func (r *byteReader) vcs() string {
 	if n == 0 {
 		return ""
 	}
-	return decodeMixed(r.take(n))
+	b := r.take(n)
+	if r.sbc != 0 && r.sbc != 1208 && ddm.IsEBCDIC(r.sbc) {
+		return ddm.DecodeCCSID(b, r.sbc)
+	}
+	return decodeMixed(b)
 }
 
 // vcmOrVcs reads the (VCM, VCS) pair convention: two length-prefixed

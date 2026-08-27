@@ -221,7 +221,7 @@ func (c *Conn) readDSS(ctx context.Context) (*ddm.DSS, error) {
 		return nil, err
 	}
 	c.trace("<- %s corr=%d chained=%v (%d bytes)", d.CodePoint, d.CorrelationID, d.Chained, len(d.Payload))
-	if c.TraceHex && len(d.Payload) <= 4096 {
+	if c.TraceHex && len(d.Payload) <= 65536 {
 		c.trace("   % X", d.Payload)
 	}
 	return d, nil

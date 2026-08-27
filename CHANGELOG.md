@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-27
+
+### Fixed
+- Character data from Db2 for i / z/OS is decoded in the server's CCSIDs
+  (single-byte CHAR/VARCHAR in CCSIDSBC, e.g. EBCDIC 37; mixed types in
+  CCSIDMBC; graphic in CCSIDDBC) instead of being assumed UTF-8 — EBCDIC
+  blanks showed up as `@`, letters were garbled. CCSIDs 37/500 (and their
+  euro variants) are converted exactly; SQLDA names and SQLCA messages use
+  the same rule.
+- A result whose SQLDARD column count differs from the QRYDSC field count
+  is reported as an error instead of yielding an empty table.
+
+### Changed
+- Trace: hex dumps up to 64 KiB (the SQLDARD of wide tables), and the
+  parsed column / field counts are logged.
+
 ## [0.1.7] - 2026-08-27
 
 ### Added

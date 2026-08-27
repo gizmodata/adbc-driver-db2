@@ -3,7 +3,9 @@ package drda
 import (
 	"bytes"
 	"encoding/binary"
+
 	"fmt"
+	"github.com/gizmodata/adbc-driver-db2/internal/ddm"
 	"math"
 	"math/big"
 	"strconv"
@@ -80,6 +82,12 @@ func ParseQRYDSC(body []byte) ([]FieldDesc, error) {
 type RowDecoder struct {
 	Fields       []FieldDesc
 	LittleEndian bool
+	// Server CCSIDs (from ACCRDBRM TYPDEFOVR): single-byte types (CHAR,
+	// VARCHAR ...) use CCSIDSBC, mixed types (MIX) use CCSIDMBC, graphic
+	// types use CCSIDDBC. Zero means "assume UTF-8".
+	CCSIDSBC uint16
+	CCSIDDBC uint16
+	CCSIDMBC uint16
 }
 
 // DecodeBlock decodes every row in a QRYDTA body. Each row is prefixed
@@ -277,26 +285,55 @@ func cloneBytes(b []byte) []byte {
 	return append([]byte(nil), b...)
 }
 
-// decodeText decodes character data according to the field's CCSID
-// (1208 = UTF-8, 1200/17584 = UTF-16BE, else EBCDIC), trimming trailing
-// blanks for fixed-width fields.
+// decodeText decodes character data. An SDA override on the field wins;
+// otherwise the CCSID follows the FD:OCA type class — single-byte
+// (CHAR/VARCHAR/LONG/CSTR/LSTR) in the server's CCSIDSBC, mixed
+// (MIX/VARMIX/LONGMIX) in CCSIDMBC, graphic in CCSIDDBC (UTF-16BE when
+// that is 1200/1208-family, as negotiated by this driver). Trailing
+// blanks are trimmed for fixed-width fields.
 func (d *RowDecoder) decodeText(b []byte, f FieldDesc, fixed bool) string {
 	if b == nil {
 		return ""
 	}
-	var s string
 	base := f.Type &^ 1
-	isGraphic := base == TypeGraphic || base == TypeVarGraph || base == TypeLongGraph
-	switch {
-	case isGraphic || f.CCSID == 1200 || f.CCSID == 1201 || f.CCSID == 13488 || f.CCSID == 17584:
-		// Graphic data is UTF-16BE (client CCSIDDBC 1200).
-		u := make([]uint16, len(b)/2)
-		for i := range u {
-			u[i] = binary.BigEndian.Uint16(b[2*i:])
+	var s string
+	switch base {
+	case TypeGraphic, TypeVarGraph, TypeLongGraph:
+		ccsid := d.CCSIDDBC
+		if f.CCSID != 0 {
+			ccsid = uint16(f.CCSID)
 		}
-		s = string(utf16.Decode(u))
+		if ccsid == 0 || ccsid == 1200 || ccsid == 1201 || ccsid == 13488 || ccsid == 17584 || ccsid == 1208 {
+			u := make([]uint16, len(b)/2)
+			for i := range u {
+				u[i] = binary.BigEndian.Uint16(b[2*i:])
+			}
+			s = string(utf16.Decode(u))
+		} else {
+			// A double-byte page we cannot convert; keep the bytes as
+			// Latin-1 so nothing is lost silently.
+			s = ddm.DecodeCCSID(b, 819)
+		}
+	case TypeMix, TypeVarMix, TypeLongMix, TypeCStrMix, TypeLStrMix:
+		ccsid := d.CCSIDMBC
+		if f.CCSID != 0 {
+			ccsid = uint16(f.CCSID)
+		}
+		if ccsid == 0 || ccsid == 1208 {
+			s = decodeMixed(b)
+		} else {
+			s = ddm.DecodeCCSID(b, ccsid)
+		}
 	default:
-		s = decodeMixed(b)
+		ccsid := d.CCSIDSBC
+		if f.CCSID != 0 {
+			ccsid = uint16(f.CCSID)
+		}
+		if ccsid == 0 || ccsid == 1208 {
+			s = decodeMixed(b)
+		} else {
+			s = ddm.DecodeCCSID(b, ccsid)
+		}
 	}
 	if fixed {
 		s = strings.TrimRight(s, " ")

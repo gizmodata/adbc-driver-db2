@@ -64,3 +64,55 @@ func PadASCII(s string, n int) []byte {
 	}
 	return out
 }
+
+// DecodeCCSID decodes single-byte text in the given IBM CCSID. UTF-8
+// (1208) and the EBCDIC pages 37/500 (and their euro variants 1140/1148)
+// are handled exactly; other single-byte pages fall back to Latin-1.
+func DecodeCCSID(b []byte, ccsid uint16) string {
+	switch ccsid {
+	case 0, 1208, 1252, 819:
+		if ccsid == 1252 || ccsid == 819 {
+			return decodeLatin1(b)
+		}
+		return string(b)
+	case 37, 1140:
+		return decodeTable(b, &cp037ToUnicode)
+	case 500, 1148:
+		return decodeTable(b, &cp500ToUnicode)
+	}
+	if ccsid >= 256 && ccsid < 1000 {
+		// Unknown EBCDIC page: 500 is the closest common denominator for
+		// letters and digits.
+		return decodeTable(b, &cp500ToUnicode)
+	}
+	return decodeLatin1(b)
+}
+
+func decodeTable(b []byte, tbl *[256]rune) string {
+	out := make([]byte, 0, len(b))
+	var buf [utf8.UTFMax]byte
+	for _, c := range b {
+		n := utf8.EncodeRune(buf[:], tbl[c])
+		out = append(out, buf[:n]...)
+	}
+	return string(out)
+}
+
+func decodeLatin1(b []byte) string {
+	out := make([]byte, 0, len(b))
+	var buf [utf8.UTFMax]byte
+	for _, c := range b {
+		n := utf8.EncodeRune(buf[:], rune(c))
+		out = append(out, buf[:n]...)
+	}
+	return string(out)
+}
+
+// IsEBCDIC reports whether a CCSID is an EBCDIC code page.
+func IsEBCDIC(ccsid uint16) bool {
+	switch ccsid {
+	case 37, 273, 277, 278, 280, 284, 285, 297, 500, 871, 1140, 1141, 1142, 1143, 1144, 1145, 1146, 1147, 1148, 1149:
+		return true
+	}
+	return false
+}
