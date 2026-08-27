@@ -11,11 +11,15 @@
 
 A **pure-Go [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for
 IBM Db2** that speaks Db2's native wire protocol,
-[DRDA](https://en.wikipedia.org/wiki/DRDA), directly. No IBM CLI / ODBC
+[DRDA](https://en.wikipedia.org/wiki/DRDA), directly.
+
+No IBM CLI / ODBC
 driver, no `db2jcc`, no cgo dependency on IBM libraries — one
 statically-linked shared library that plugs into every ADBC language
 binding (Python, Go, R, C/C++, C#, Rust, JavaScript) and returns
 [Arrow](https://arrow.apache.org/) record batches.
+
+> An independent, open-source project. Not affiliated with, endorsed by, or sponsored by IBM Corporation. "IBM" and "Db2" are trademarks of International Business Machines Corporation, used here only to describe compatibility.
 
 ```
 pip install adbc-driver-db2
@@ -342,10 +346,39 @@ A Db2 for testing: `docker run -d -p 50000:50000 --privileged -e LICENSE=accept 
 transparent proxy that decodes DRDA traffic — handy when comparing this
 driver's messages with IBM's own clients.
 
+## Provenance & licensing
+
+This is an **independent, from-scratch reimplementation** of a client for
+IBM Db2's DRDA network protocol, written in Go. It contains **no IBM
+Corporation source code** and links against **no IBM Corporation libraries**
+— that's the whole point (no IBM CLI/ODBC, no `db2jcc`). DRDA (Distributed
+Relational Database Architecture) is an **open standard published by
+[The Open Group](https://www.opengroup.org/)**; network protocols and the
+interfaces needed for interoperability are not proprietary to any vendor.
+
+The implementation was written from the public DRDA specification and by
+reference to **openly licensed** source — no confidential specification,
+non-public documentation, or binary disassembly was used:
+
+- [Apache Derby](https://db.apache.org/derby/) (**Apache-2.0**) — its network
+  client and server DRDA implementations.
+- [pydrda](https://github.com/nakagami/pydrda) (**MIT**) — a pure-Python Db2
+  DRDA client; parts of the Db2-specific message encoding were reimplemented
+  by reference to it.
+- [Apache Arrow ADBC](https://github.com/apache/arrow-adbc) and
+  [Apache Arrow Go](https://github.com/apache/arrow-go) (**Apache-2.0**) — the
+  ADBC framework and Arrow libraries.
+
+See [`NOTICE`](NOTICE) for full attribution.
+
+## Trademarks
+
+IBM and Db2 are trademarks or registered trademarks of International Business
+Machines Corporation. **adbc-driver-db2 is not affiliated with, endorsed by,
+or sponsored by IBM Corporation.** References to "IBM Db2" identify the
+software this driver interoperates with and are nominative fair use.
+
 ## License
 
-MIT — see [LICENSE](LICENSE). DRDA is an open standard published by
-[The Open Group](https://www.opengroup.org/); this implementation was
-written from the specification and the open-source
-[Apache Derby](https://db.apache.org/derby/) and
-[pydrda](https://github.com/nakagami/pydrda) clients.
+[MIT](LICENSE) — Copyright (c) 2026 GizmoData LLC. See [`NOTICE`](NOTICE) for
+third-party attributions.

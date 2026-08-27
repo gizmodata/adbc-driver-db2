@@ -14,3 +14,21 @@ It is built on the Apache Arrow ADBC Go framework
 (https://github.com/apache/arrow-adbc, Apache-2.0) and the Apache Arrow Go
 library (https://github.com/apache/arrow-go, Apache-2.0); those libraries
 ship under their own license terms.
+
+No confidential IBM Corporation specification, non-public documentation, or
+disassembly of any IBM Corporation binary was used in creating this software.
+The DRDA (Distributed Relational Database Architecture) specification is an
+open standard published by The Open Group.
+
+------------------------------------------------------------------------------
+Trademarks
+------------------------------------------------------------------------------
+
+IBM and Db2 are trademarks or registered trademarks of International Business
+Machines Corporation. DRDA is a specification of The Open Group. All other
+trademarks are the property of their respective owners.
+
+adbc-driver-db2 is not affiliated with, endorsed by, sponsored by, or
+otherwise associated with IBM Corporation. References to "IBM Db2" describe the
+software this driver interoperates with, and are nominative fair use for the
+sole purpose of identifying that compatibility.

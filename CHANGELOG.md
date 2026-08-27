@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-08-27
+
+### Added
+
+- `NOTICE` file strengthened with an explicit no-confidential-materials /
+  independent-reimplementation statement and a trademark section; it now
+  ships inside the wheel (`dist-info/licenses/`).
+- README "Provenance & licensing" and "Trademarks" sections and a
+  not-affiliated-with-IBM disclaimer.
+
 ## [0.1.9] - 2026-08-27
 
 ### Fixed
