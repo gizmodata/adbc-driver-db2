@@ -114,6 +114,32 @@ with db2.connect(uri=db2_uri, username=db2_user, password=db2_pw) as src, \
         print(f"Loaded {rows:,} rows")
 ```
 
+**Tuning batch size for wide tables.** Each Arrow record batch becomes one
+Flight SQL `DoPut` message on the GizmoSQL side, and the GizmoSQL driver's
+gRPC client caps messages at 16 MiB by default. With the Db2 default of
+65,536 rows per batch, a table with wide rows (~825 bytes/row or more)
+overflows that cap:
+
+```
+InternalError: INTERNAL: [GizmoSQL] [FlightSQL] trying to send message larger
+than max (54101430 vs. 16777216) (ResourceExhausted; ExecuteIngest)
+```
+
+Fix it by shrinking the Db2 batches (`batch_size` URI parameter or
+`adbc.db2.batch_size` in `db_kwargs`) — 8,192 rows keeps the batch above
+under 8 MiB and uses less memory on both ends:
+
+```python
+src = db2.connect(uri=db2_uri + "?batch_size=8192", username=db2_user, password=db2_pw)
+# or, equivalently:
+src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_size": "8192"},
+                  username=db2_user, password=db2_pw)
+```
+
+Alternatively (or additionally), raise the GizmoSQL client's gRPC cap with
+`adbc.flight.sql.client_option.with_max_msg_size` — see the
+[GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
+
 ### Bulk ingest (Arrow → Db2)
 
 ```python
