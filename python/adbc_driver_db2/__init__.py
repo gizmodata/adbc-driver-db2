@@ -52,6 +52,9 @@ class DatabaseOptions(enum.Enum):
     APPLICATION_NAME = "adbc.db2.application_name"
     #: Maximum rows per Arrow record batch (default 65536).
     BATCH_SIZE = "adbc.db2.batch_size"
+    #: Approximate maximum bytes per Arrow record batch (default 0 = only
+    #: ``batch_size`` applies). Useful for wide rows.
+    BATCH_BYTES = "adbc.db2.batch_bytes"
     #: ``"true"`` to log DRDA traffic to stderr.
     TRACE = "adbc.db2.trace"
 

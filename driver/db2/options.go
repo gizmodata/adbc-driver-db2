@@ -52,6 +52,9 @@ const (
 	OptionApplicationName = "adbc.db2.application_name"
 	// OptionBatchSize caps rows per Arrow record batch (default 65536).
 	OptionBatchSize = "adbc.db2.batch_size"
+	// OptionBatchBytes caps the approximate size of an Arrow record batch
+	// in bytes (0 = unlimited; rows are still capped by batch_size).
+	OptionBatchBytes = "adbc.db2.batch_bytes"
 	// OptionTrace: "true" logs DRDA traffic (one line per message plus the
 	// SQL text); "hex" additionally dumps reply payloads. Goes to stderr
 	// unless OptionTraceFile names a file (appended to) — use that from
@@ -71,11 +74,12 @@ const (
 
 // connConfig is the resolved connection configuration.
 type connConfig struct {
-	drda      drda.Config
-	batchSize int
-	trace     bool
-	traceHex  bool
-	traceFile string
+	drda       drda.Config
+	batchSize  int
+	batchBytes int64
+	trace      bool
+	traceHex   bool
+	traceFile  string
 }
 
 // parseOptions merges the URI and explicit ADBC options into a config.
@@ -172,6 +176,12 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 					return nil, errStatus(adbc.StatusInvalidArgument, "db2: invalid batch_size %q", v)
 				}
 				cfg.batchSize = n
+			case "batch_bytes":
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil || n < 0 {
+					return nil, errStatus(adbc.StatusInvalidArgument, "db2: invalid batch_bytes %q", v)
+				}
+				cfg.batchBytes = n
 			case "user", "uid":
 				cfg.drda.User = v
 			case "password", "pwd":
@@ -233,6 +243,12 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 				return nil, errStatus(adbc.StatusInvalidArgument, "db2: invalid %s %q", k, v)
 			}
 			cfg.batchSize = n
+		case OptionBatchBytes:
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return nil, errStatus(adbc.StatusInvalidArgument, "db2: invalid %s %q", k, v)
+			}
+			cfg.batchBytes = n
 		case OptionTrace:
 			cfg.trace = isTrue(v) || strings.EqualFold(v, "hex")
 			cfg.traceHex = strings.EqualFold(v, "hex")

@@ -72,6 +72,7 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 | `schema=NAME` / `adbc.db2.current_schema` | `SET CURRENT SCHEMA` after connecting |
 | `query_block_size=N` / `adbc.db2.query_block_size` | DRDA `QRYBLKSZ` in bytes (default 1 MiB) |
 | `batch_size=N` / `adbc.db2.batch_size` | Max rows per Arrow record batch (default 65536) |
+| `batch_bytes=N` / `adbc.db2.batch_bytes` | Approximate max bytes per Arrow record batch (default 0 = only `batch_size` applies) |
 | `connect_timeout=30` / `adbc.db2.connect_timeout` | Seconds or Go duration |
 | `application_name=X` / `adbc.db2.application_name` | Reported to the server |
 | `package=COLL.PKG` / `adbc.db2.package` | Dynamic-SQL package (default `NULLID.SYSSH200`); bound automatically if missing (`adbc.db2.no_auto_bind=true` disables) |
@@ -125,18 +126,20 @@ InternalError: INTERNAL: [GizmoSQL] [FlightSQL] trying to send message larger
 than max (54101430 vs. 16777216) (ResourceExhausted; ExecuteIngest)
 ```
 
-Fix it by shrinking the Db2 batches (`batch_size` URI parameter or
-`adbc.db2.batch_size` in `db_kwargs`) — 8,192 rows keeps the batch above
-under 8 MiB and uses less memory on both ends:
+Fix it by capping the batch size in bytes with `batch_bytes` (URI parameter
+or `adbc.db2.batch_bytes` in `db_kwargs`) — 8 MiB keeps every batch
+comfortably under the cap regardless of row width, and uses less memory on
+both ends:
 
 ```python
-src = db2.connect(uri=db2_uri + "?batch_size=8192", username=db2_user, password=db2_pw)
+src = db2.connect(uri=db2_uri + "?batch_bytes=8388608", username=db2_user, password=db2_pw)
 # or, equivalently:
-src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_size": "8192"},
+src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_bytes": str(8 * 1024 * 1024)},
                   username=db2_user, password=db2_pw)
 ```
 
-Alternatively (or additionally), raise the GizmoSQL client's gRPC cap with
+(`batch_size=N` caps rows per batch instead, if you would rather size by
+row count.) Alternatively (or additionally), raise the GizmoSQL client's gRPC cap with
 `adbc.flight.sql.client_option.with_max_msg_size` — see the
 [GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
 

@@ -228,3 +228,37 @@ func TestADBCErrorMapping(t *testing.T) {
 	require.Equal(t, "42704", string(ae.SqlState[:]))
 	t.Logf("%v", err)
 }
+
+func TestADBCBatchBytes(t *testing.T) {
+	drv := NewDriver(memory.DefaultAllocator)
+	// ~1 KiB per row; cap batches at 64 KiB -> roughly 60-70 rows each.
+	db, err := drv.NewDatabase(map[string]string{OptionURI: testURI(t), OptionBatchBytes: "65536"})
+	require.NoError(t, err)
+	c, err := db.Open(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Close(); db.Close() })
+	conn := c.(*connectionImpl)
+	require.EqualValues(t, 65536, conn.cfg.batchBytes)
+
+	ctx := context.Background()
+	stmt, err := conn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+
+	require.NoError(t, stmt.SetSqlQuery(`WITH T(N) AS (VALUES 1 UNION ALL SELECT N+1 FROM T WHERE N < 2000)
+		SELECT N, REPEAT('x', 1000) AS WIDE FROM T`))
+	rr, _, err := stmt.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	var rows, batches int64
+	for rr.Next() {
+		rec := rr.Record()
+		rows += rec.NumRows()
+		batches++
+		require.LessOrEqual(t, rec.NumRows(), int64(80), "batch_bytes should cap rows per batch")
+	}
+	require.NoError(t, rr.Err())
+	rr.Release()
+	t.Logf("rows=%d batches=%d", rows, batches)
+	require.EqualValues(t, 2000, rows)
+	require.Greater(t, batches, int64(20))
+}

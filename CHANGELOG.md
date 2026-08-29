@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-08-28
+
+### Added
+- `batch_bytes` URI parameter / `adbc.db2.batch_bytes` option: approximate
+  upper bound on bytes per Arrow record batch (default 0 = only `batch_size`
+  applies), mirroring the Oracle driver. Wide tables streamed into GizmoSQL
+  (`adbc_ingest(data=cursor.fetch_record_batch())`) previously overflowed
+  the Flight SQL client's 16 MiB gRPC message cap with the default
+  65,536-row batches; `?batch_bytes=8388608` now keeps every batch under it
+  regardless of row width. Verified end-to-end against live Db2 + GizmoSQL.
+
 ### Changed
-- README: document tuning `batch_size` when streaming wide tables into
-  GizmoSQL (the Flight SQL client's 16 MiB gRPC message cap).
+- README: document tuning `batch_bytes` / `batch_size` when streaming wide
+  tables into GizmoSQL.
 
 ## [0.1.11] - 2026-08-27
 
