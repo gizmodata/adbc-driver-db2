@@ -201,3 +201,13 @@ def test_error_reporting(db2_server):
             cur.execute("SELECT * FROM NO_SUCH_TABLE_XYZ")
         assert "SQLCODE=-204" in str(excinfo.value)
         assert "42704" in str(excinfo.value)
+
+
+def test_batch_bytes_default_is_flight_safe(db2_server):
+    """The default batch_bytes is 8 MiB, so a single record batch always
+    fits under Flight SQL's 16 MiB gRPC message cap even for wide rows;
+    an explicit batch_bytes=0 restores unlimited batches."""
+    with _connect(db2_server) as conn:
+        assert conn.adbc_connection.get_option(key="adbc.db2.batch_bytes") == "8388608"
+    with _connect(db2_server, db_kwargs={"adbc.db2.batch_bytes": "0"}) as conn:
+        assert conn.adbc_connection.get_option(key="adbc.db2.batch_bytes") == "0"

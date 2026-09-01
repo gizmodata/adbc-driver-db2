@@ -68,11 +68,11 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 | `tls=true` / `adbc.db2.tls` | TLS (Db2's SSL port is conventionally 50001; required for Db2 on Cloud) |
 | `tls_ca_cert=/path.pem` / `adbc.db2.tls.ca_cert` | CA bundle for self-signed servers |
 | `tls_skip_verify=true` / `adbc.db2.tls.skip_verify` | Skip certificate verification |
-| `secmec=9` / `adbc.db2.security_mechanism` | DRDA security mechanism: `9` encrypted user id + password (default when the server allows it), `3` cleartext password (inside TLS this is fine), `4` user id only |
+| `secmec=9` / `adbc.db2.security_mechanism` | DRDA security mechanism: `9` encrypted user id + password (default when the server allows it), `3` cleartext password (inside TLS this is fine), `4` user id only. An explicit setting **fails closed** — the connection errors instead of silently downgrading when the server refuses it. SECMEC protects the credentials only; use TLS to encrypt data in transit. The read-only connection option `adbc.db2.security_mechanism_active` reports what was actually negotiated. |
 | `schema=NAME` / `adbc.db2.current_schema` | `SET CURRENT SCHEMA` after connecting |
 | `query_block_size=N` / `adbc.db2.query_block_size` | DRDA `QRYBLKSZ` in bytes (default 1 MiB) |
 | `batch_size=N` / `adbc.db2.batch_size` | Max rows per Arrow record batch (default 65536) |
-| `batch_bytes=N` / `adbc.db2.batch_bytes` | Approximate max bytes per Arrow record batch (default 0 = only `batch_size` applies) |
+| `batch_bytes=N` / `adbc.db2.batch_bytes` | Approximate max bytes per Arrow record batch (default 8 MiB, which keeps batches under Flight SQL's 16 MiB gRPC cap; 0 = only `batch_size` applies) |
 | `connect_timeout=30` / `adbc.db2.connect_timeout` | Seconds or Go duration |
 | `application_name=X` / `adbc.db2.application_name` | Reported to the server |
 | `package=COLL.PKG` / `adbc.db2.package` | Dynamic-SQL package (default `NULLID.SYSSH200`); bound automatically if missing (`adbc.db2.no_auto_bind=true` disables) |
@@ -109,37 +109,32 @@ import adbc_driver_gizmosql.dbapi as gizmosql
 with db2.connect(uri=db2_uri, username=db2_user, password=db2_pw) as src, \
      gizmosql.connect(gizmosql_uri, username="token", password=token) as dst:
     with src.cursor() as s, dst.cursor() as d:
-        s.execute("SELECT * FROM PFWF6076.CGIBASE")
-        rows = d.adbc_ingest(table_name="cgibase", data=s.fetch_record_batch(), mode="replace")
+        s.execute("SELECT * FROM SALES.ORDERS")
+        rows = d.adbc_ingest(table_name="orders", data=s.fetch_record_batch(), mode="replace")
         dst.commit()
         print(f"Loaded {rows:,} rows")
 ```
 
-**Tuning batch size for wide tables.** Each Arrow record batch becomes one
-Flight SQL `DoPut` message on the GizmoSQL side, and the GizmoSQL driver's
-gRPC client caps messages at 16 MiB by default. With the Db2 default of
-65,536 rows per batch, a table with wide rows (~825 bytes/row or more)
-overflows that cap:
-
-```
-InternalError: INTERNAL: [GizmoSQL] [FlightSQL] trying to send message larger
-than max (54101430 vs. 16777216) (ResourceExhausted; ExecuteIngest)
-```
-
-Fix it by capping the batch size in bytes with `batch_bytes` (URI parameter
-or `adbc.db2.batch_bytes` in `db_kwargs`) — 8 MiB keeps every batch
-comfortably under the cap regardless of row width, and uses less memory on
-both ends:
+**Batch sizing.** Each Arrow record batch becomes one Flight SQL `DoPut`
+message on the GizmoSQL side, and the GizmoSQL driver's gRPC client caps
+messages at 16 MiB by default. The Db2 driver's batches are Flight-safe
+out of the box: a batch is capped at 65,536 rows (`batch_size`) **and**
+8 MiB (`batch_bytes`), so even very wide tables stream through without
+tripping the cap. Both knobs are tunable (URI parameter or `adbc.db2.*`
+in `db_kwargs`):
 
 ```python
-src = db2.connect(uri=db2_uri + "?batch_bytes=8388608", username=db2_user, password=db2_pw)
+src = db2.connect(uri=db2_uri + "?batch_bytes=4194304", username=db2_user, password=db2_pw)
 # or, equivalently:
-src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_bytes": str(8 * 1024 * 1024)},
+src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_bytes": str(4 * 1024 * 1024)},
                   username=db2_user, password=db2_pw)
 ```
 
-(`batch_size=N` caps rows per batch instead, if you would rather size by
-row count.) Alternatively (or additionally), raise the GizmoSQL client's gRPC cap with
+`batch_bytes=0` removes the byte cap (batches then bound only by
+`batch_size` rows — a pre-0.2 default that could exceed 16 MiB for rows
+wider than ~825 bytes and fail ingest with `ResourceExhausted: trying to
+send message larger than max`). To move *more* than 8 MiB per message,
+also raise the GizmoSQL client's gRPC cap with
 `adbc.flight.sql.client_option.with_max_msg_size` — see the
 [GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
 

@@ -242,3 +242,6 @@ jobs:
             release-bundle/libadbc_driver_db2-*
             release-bundle/SHA256SUMS
           generate_release_notes: true
+          # Semver pre-release tags (v1.0.0-rc1, ...) get a pre-release
+          # GitHub Release.
+          prerelease: ${{ contains(github.ref_name, '-') }}

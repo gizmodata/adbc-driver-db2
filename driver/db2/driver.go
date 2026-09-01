@@ -246,6 +246,12 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 		return c.conn.Database(), nil
 	case adbc.OptionKeyCurrentDbSchema:
 		return c.currentSchema(context.Background())
+	case OptionBatchSize:
+		return strconv.Itoa(c.cfg.batchSize), nil
+	case OptionBatchBytes:
+		return strconv.FormatInt(c.cfg.batchBytes, 10), nil
+	case OptionSecurityMechanismActive:
+		return strconv.Itoa(int(c.conn.SecurityMechanism())), nil
 	}
 	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", key)
 }

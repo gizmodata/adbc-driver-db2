@@ -38,8 +38,15 @@ const (
 	OptionTLSSkipVerify = "adbc.db2.tls.skip_verify"
 	// OptionSecurityMechanism forces a DRDA SECMEC: "3" (cleartext
 	// password), "4" (user id only), "9" (Diffie-Hellman encrypted;
-	// default when the server allows it).
+	// default when the server allows it). An explicitly set mechanism
+	// fails closed — the connection errors rather than silently
+	// downgrading when the server refuses it. Note SECMEC 9 encrypts the
+	// credentials only; data in transit is protected by TLS, not SECMEC.
 	OptionSecurityMechanism = "adbc.db2.security_mechanism"
+	// OptionSecurityMechanismActive (read-only, connection) reports the
+	// SECMEC that was actually negotiated for the session, e.g. "9" or
+	// "3" (it can differ from the preference when chosen automatically).
+	OptionSecurityMechanismActive = "adbc.db2.security_mechanism_active"
 	// OptionCurrentSchema runs SET CURRENT SCHEMA after connecting.
 	OptionCurrentSchema = "adbc.db2.current_schema"
 	// OptionQueryBlockSize is the DRDA QRYBLKSZ in bytes (default 1 MiB;
@@ -53,7 +60,9 @@ const (
 	// OptionBatchSize caps rows per Arrow record batch (default 65536).
 	OptionBatchSize = "adbc.db2.batch_size"
 	// OptionBatchBytes caps the approximate size of an Arrow record batch
-	// in bytes (0 = unlimited; rows are still capped by batch_size).
+	// in bytes (default 8 MiB — keeps a batch under common transport
+	// limits such as gRPC's 16 MiB Flight SQL message cap; 0 = unlimited;
+	// rows are still capped by batch_size).
 	OptionBatchBytes = "adbc.db2.batch_bytes"
 	// OptionTrace: "true" logs DRDA traffic (one line per message plus the
 	// SQL text); "hex" additionally dumps reply payloads. Goes to stderr
@@ -85,7 +94,10 @@ type connConfig struct {
 // parseOptions merges the URI and explicit ADBC options into a config.
 // Explicit options override URI components.
 func parseOptions(opts map[string]string) (*connConfig, error) {
-	cfg := &connConfig{batchSize: 65536}
+	// batchBytes defaults to 8 MiB so a single batch stays under common
+	// transport limits (e.g. Flight SQL's 16 MiB gRPC message cap) even
+	// for wide rows; set batch_bytes=0 for unlimited.
+	cfg := &connConfig{batchSize: 65536, batchBytes: 8 << 20}
 	cfg.drda.ConnectTimeout = 30 * time.Second
 	var tlsEnabled, skipVerify bool
 	var caCert string

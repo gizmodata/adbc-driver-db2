@@ -338,7 +338,13 @@ func (c *Conn) handshake(ctx context.Context) error {
 			}
 		}
 	}
-	// If the server countered with a different mechanism, re-issue ACCSEC.
+	// If the server countered with a different mechanism, re-issue ACCSEC —
+	// but only when the mechanism was chosen automatically. An explicitly
+	// configured mechanism must fail closed, never be silently downgraded
+	// (e.g. from encrypted (9) to a cleartext password (3)).
+	if serverSecMec != secmec && c.cfg.SecurityMechanism != 0 {
+		return fmt.Errorf("drda: the server does not accept security mechanism %d (it offers %d); refusing to downgrade an explicitly configured adbc.db2.security_mechanism — remove the option to negotiate automatically", secmec, serverSecMec)
+	}
 	if serverSecMec != secmec {
 		c.trace("server requires SECMEC %d (we offered %d); renegotiating", serverSecMec, secmec)
 		secmec = serverSecMec
@@ -1089,6 +1095,11 @@ func pickSecMec(offered []uint16) uint16 {
 
 // Database returns the RDB name this connection is attached to.
 func (c *Conn) Database() string { return c.rdbnam }
+
+// SecurityMechanism returns the SECMEC that was actually negotiated for
+// this session (which can differ from the configured preference when the
+// mechanism was chosen automatically).
+func (c *Conn) SecurityMechanism() uint16 { return c.Server.SecMec }
 
 // sqldaVariant is the SQLDAGRP layout used by this server.
 func (c *Conn) sqldaVariant() SQLDAVariant { return sqldaVariantFor(c.Server.ProductID) }

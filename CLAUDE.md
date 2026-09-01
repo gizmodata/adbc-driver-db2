@@ -47,6 +47,19 @@ debugging.
 - Local servers: `icr.io/db2_community/db2` (amd64; ~10 min first start;
   offers SECMEC 3 only) and `gizmodata/gizmosql` (`TLS_ENABLED=0`,
   URI `gizmosql://localhost:31337?transport=tcp`).
+- Security semantics (mirror the Oracle driver's NNE posture): an
+  *explicitly* set `adbc.db2.security_mechanism` fails closed — the
+  handshake errors instead of renegotiating when the server counters
+  (guard in `Conn.handshake`); only the automatic default (option unset)
+  may downgrade via `pickSecMec`. SECMEC 9 encrypts credentials only —
+  TLS is the data-in-transit protection. Read-only
+  `adbc.db2.security_mechanism_active` reports the negotiated SECMEC.
+  The community container accepts SECMEC 3 only, which is what
+  `test_security.py` / `security_integration_test.go` rely on (the
+  wire-proxy test proves the password stays off the wire when an
+  explicit 9 is refused).
+- `batch_bytes` defaults to 8 MiB (Flight-safe; 0 = unlimited), matching
+  the Oracle driver.
 
 ## Protocol details the DRDA V5 spec underspecifies (confirmed against a live server)
 

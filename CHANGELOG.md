@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-01
+
+### Fixed
+
+- **Security — an explicit `adbc.db2.security_mechanism` now fails
+  closed.** Previously, when the server refused the configured SECMEC,
+  the driver silently renegotiated with whatever the server offered — so
+  explicitly requesting `9` (Diffie-Hellman encrypted credentials)
+  against a server that only accepts `3` transmitted the password in
+  cleartext anyway. Now an explicitly configured mechanism errors with
+  "refusing to downgrade" instead; the automatic default (no option set)
+  still negotiates the strongest mechanism the server offers. Verified
+  at the wire-byte level (`test_security.py`) — with an explicit
+  `secmec=9` the password never leaves the client.
+
+### Added
+
+- Read-only connection option `adbc.db2.security_mechanism_active`
+  reporting the SECMEC actually negotiated for the session (e.g. `"9"`,
+  `"3"`), plus `adbc.db2.batch_size` / `adbc.db2.batch_bytes` are now
+  readable via `GetOption`.
+- Documentation: SECMEC protects credentials only — data in transit is
+  protected by TLS, not by the DRDA security mechanism.
+
+### Changed
+
+- `adbc.db2.batch_bytes` now defaults to **8 MiB** (was unlimited), so a
+  single Arrow record batch always fits under common transport limits —
+  in particular Flight SQL's 16 MiB gRPC message cap when streaming wide
+  tables straight into `adbc_ingest` on another driver. Batches are
+  still capped at `batch_size` rows (default 65,536); set
+  `batch_bytes=0` to restore unlimited batches.
+- CI: semver pre-release tags (e.g. `v1.0.0-rc1`) now create pre-release
+  GitHub Releases.
+
 ## [0.1.12] - 2026-08-28
 
 ### Added
