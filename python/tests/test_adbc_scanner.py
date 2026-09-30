@@ -96,7 +96,7 @@ def test_duckdb_adbc_scan_pulls_from_db2(db2_server):
         uri=db2_server.uri, username=db2_server.user, password=db2_server.password, autocommit=True
     ) as c, c.cursor() as cur:
         cur.execute("DROP TABLE ADBC_SCAN_T")
-    con.execute(query="SELECT adbc_disconnect(getvariable('db2')::BIGINT)")
+    con.execute(query="SELECT * FROM adbc_disconnect(getvariable('db2')::BIGINT)")
     con.close()
 
 
@@ -195,7 +195,7 @@ def test_duckdb_writes_to_db2(db2_server):
                 assert count == rows, name
                 assert total == rows * (rows + 1) // 2, name
 
-        con.execute(query="SELECT adbc_disconnect(getvariable('db2')::BIGINT)")
+        con.execute(query="SELECT * FROM adbc_disconnect(getvariable('db2')::BIGINT)")
     finally:
         con.close()
         drop(ctas_table, insert_table)
