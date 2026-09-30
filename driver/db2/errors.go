@@ -22,7 +22,9 @@ func fromDRDAError(err error) error {
 	}
 	var ca *drda.SQLCA
 	if errors.As(err, &ca) {
-		e := adbc.Error{Code: statusForSQLCA(ca), Msg: "db2: " + ca.Error(), VendorCode: ca.SQLCode}
+		// err.Error(), not ca.Error(): keep context wrapped around the
+		// SQLCA (e.g. why a missing package could not be bound).
+		e := adbc.Error{Code: statusForSQLCA(ca), Msg: "db2: " + err.Error(), VendorCode: ca.SQLCode}
 		copy(e.SqlState[:], ca.SQLState)
 		return e
 	}

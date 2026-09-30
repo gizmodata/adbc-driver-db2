@@ -1,6 +1,7 @@
 package drda
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -135,11 +136,31 @@ func (r *byteReader) vcs() string {
 	if n == 0 {
 		return ""
 	}
-	b := r.take(n)
+	return r.decodeVCS(r.take(n))
+}
+
+func (r *byteReader) decodeVCS(b []byte) string {
 	if r.sbc != 0 && r.sbc != 1208 && ddm.IsEBCDIC(r.sbc) {
 		return ddm.DecodeCCSID(b, r.sbc)
 	}
 	return decodeMixed(b)
+}
+
+// vcsTokens reads an SQLERRMC-style VCS/VCM string whose message tokens
+// Db2 separates with 0xFF, and returns the tokens joined by ", ". Tokens
+// are split before decoding: a raw 0xFF is invalid UTF-8, which would
+// otherwise tip decodeMixed into misreading an ASCII message as EBCDIC.
+func (r *byteReader) vcsTokens() string {
+	n := int(r.u16BE())
+	if n == 0 {
+		return ""
+	}
+	parts := bytes.Split(r.take(n), []byte{0xFF})
+	toks := make([]string, len(parts))
+	for i, p := range parts {
+		toks[i] = r.decodeVCS(p)
+	}
+	return strings.Join(toks, ", ")
 }
 
 // vcmOrVcs reads the (VCM, VCS) pair convention: two length-prefixed
@@ -182,14 +203,12 @@ func parseSQLCAGRP(r *byteReader) *SQLCA {
 		}
 		copy(ca.SQLWarn[:], r.take(11))
 		ca.RDBName = r.vcs()
-		msgM := r.vcs()
-		msgS := r.vcs()
-		msg := msgM
-		if msg == "" {
-			msg = msgS
+		msgM := r.vcsTokens()
+		msgS := r.vcsTokens()
+		ca.Message = msgM
+		if ca.Message == "" {
+			ca.Message = msgS
 		}
-		// Db2 separates message tokens with 0xFF.
-		ca.Message = strings.ReplaceAll(msg, "ÿ", ", ")
 	}
 	// SQLDIAGGRP — null (0xFF) in practice; a non-null group would need
 	// the full diagnostics grammar. Consume the flag and stop.

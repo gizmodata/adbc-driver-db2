@@ -79,6 +79,15 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 | `trace=true|hex` / `adbc.db2.trace` | Log every DRDA message (`hex` adds payload dumps) |
 | `trace_file=/path` / `adbc.db2.trace_file` | Write the trace to a file instead of stderr (use from notebooks) |
 
+**Dynamic-SQL package (SQL0805N).** Db2 runs dynamic SQL inside a
+package. Db2 LUW ships `NULLID.SYSSH200`; Db2 for i and Db2 for z/OS do
+not, so on the first statement the driver creates it, which requires
+authority to bind packages in that collection (on Db2 for i the `NULLID`
+library must exist: `CRTLIB NULLID`). If the user lacks that authority,
+the SQL0805N error states the bind failure; have a DBA create the package
+once, or point `package=` at a collection the user may create packages
+in, e.g. `db2://user:pw@host:446/RDB?package=MYLIB.SYSSH200`.
+
 Standard ADBC options also apply: `username`, `password`,
 `adbc.connection.autocommit`, `adbc.connection.transaction.isolation_level`
 (mapped to `SET CURRENT ISOLATION` UR/CS/RS/RR), `adbc.connection.catalog`,

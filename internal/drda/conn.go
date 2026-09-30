@@ -892,8 +892,11 @@ func (c *Conn) ExecImmediate(ctx context.Context, sql string) (*Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	res, err := c.execImmediateLocked(ctx, sql)
-	if err != nil && c.autoBind(ctx, err) {
-		res, err = c.execImmediateLocked(ctx, sql)
+	if err != nil {
+		var retry bool
+		if retry, err = c.autoBind(ctx, err); retry {
+			res, err = c.execImmediateLocked(ctx, sql)
+		}
 	}
 	return res, err
 }
@@ -1008,8 +1011,11 @@ func (c *Conn) Describe(ctx context.Context, sql string) (cols, params []ColumnD
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cols, params, err = c.describeLocked(ctx, sql)
-	if err != nil && c.autoBind(ctx, err) {
-		cols, params, err = c.describeLocked(ctx, sql)
+	if err != nil {
+		var retry bool
+		if retry, err = c.autoBind(ctx, err); retry {
+			cols, params, err = c.describeLocked(ctx, sql)
+		}
 	}
 	return cols, params, err
 }

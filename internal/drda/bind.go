@@ -1,6 +1,7 @@
 package drda
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -81,8 +82,10 @@ func (c *Conn) bindPackage(ctx context.Context) error {
 	}
 	// The server answers every command; on the first failure it stops
 	// the chain, so read DSS by DSS until either the ENDBND reply (last
-	// correlation id) or an error reply ends a chain.
-	var bindErr error
+	// correlation id) or an error reply ends a chain. A reply message
+	// (BGNBNDRM, ...) is usually followed by an SQLCARD giving the actual
+	// reason (e.g. SQL0552N), which is the error to report.
+	var caErr, rmErr error
 	for {
 		d, err := c.readDSS(ctx)
 		if err != nil {
@@ -94,25 +97,21 @@ func (c *Conn) bindPackage(ctx context.Context) error {
 			if perr != nil {
 				return perr
 			}
-			if ca.IsError() && bindErr == nil {
-				bindErr = fmt.Errorf("drda: binding package %s.%s failed: %w", c.pkgCollection, c.pkgID, ca)
-			}
-		case ddm.BGNBNDRM, ddm.PKGBNARM, ddm.PKGBPARM:
-			if bindErr == nil {
-				bindErr = c.replyError(d)
+			if ca.IsError() && caErr == nil {
+				caErr = ca
 			}
 		case ddm.RDBUPDRM, ddm.ENDUOWRM:
 		default:
-			if e := c.replyError(d); e != nil && bindErr == nil {
-				bindErr = fmt.Errorf("drda: binding package %s.%s failed: %w", c.pkgCollection, c.pkgID, e)
+			if e := c.replyError(d); e != nil && rmErr == nil {
+				rmErr = e
 			}
 		}
-		if !d.Chained && (d.CorrelationID >= corr || bindErr != nil) {
+		if !d.Chained && (d.CorrelationID >= corr || caErr != nil || rmErr != nil) {
 			break
 		}
 	}
-	if bindErr != nil {
-		return bindErr
+	if bindErr := cmp.Or(caErr, rmErr); bindErr != nil {
+		return fmt.Errorf("binding package %s.%s failed: %w", c.pkgCollection, c.pkgID, bindErr)
 	}
 	// The bind runs in its own unit of work; commit it.
 	c.send(ctx, c.packRDBCMM(), 1, false, true)
@@ -130,17 +129,55 @@ func (c *Conn) bindPackage(ctx context.Context) error {
 	return nil
 }
 
-// autoBind binds the package once after a SQL0805N and reports whether
-// the failed operation should be retried. The caller holds c.mu.
-func (c *Conn) autoBind(ctx context.Context, err error) bool {
-	if !c.isOurPackageNotFound(err) || c.bindAttempted || c.cfg.NoAutoBind {
-		return false
+// PackageError reports that this connection's dynamic-SQL package does
+// not exist on the server (SQL0805N) and the driver could not create it.
+// It unwraps to the SQL0805N so SQLSTATE/SQLCODE are preserved.
+type PackageError struct {
+	Collection string
+	ID         string
+	Err        error // the SQL0805N
+	BindErr    error // why the auto-bind failed; nil when auto-bind is disabled
+}
+
+func (e *PackageError) Error() string {
+	pkg := e.Collection + "." + e.ID
+	if e.BindErr == nil {
+		return fmt.Sprintf("%v (package %s does not exist and auto-bind is disabled by adbc.db2.no_auto_bind)", e.Err, pkg)
+	}
+	return fmt.Sprintf("%v (package %s does not exist and the driver could not create it: %v; "+
+		"creating it needs authority to bind packages in collection %s — on Db2 for i the %s library must exist, e.g. CRTLIB %s. "+
+		"Have a DBA create it once, or set adbc.db2.package to COLLECTION.%s naming a collection you may create packages in)",
+		e.Err, pkg, e.BindErr, e.Collection, e.Collection, e.Collection, e.ID)
+}
+
+func (e *PackageError) Unwrap() error { return e.Err }
+
+// autoBind handles a failed operation's error. After a SQL0805N naming
+// this connection's package it binds the package (once per connection)
+// and reports that the operation should be retried; otherwise it returns
+// the error to report, explaining why the package could not be created.
+// The caller holds c.mu.
+func (c *Conn) autoBind(ctx context.Context, err error) (retry bool, _ error) {
+	if !c.isOurPackageNotFound(err) {
+		return false, err
+	}
+	pkgErr := func(berr error) error {
+		return &PackageError{Collection: c.pkgCollection, ID: c.pkgID, Err: err, BindErr: berr}
+	}
+	if c.cfg.NoAutoBind {
+		return false, pkgErr(nil)
+	}
+	if c.bindAttempted {
+		if c.bindError != nil {
+			return false, pkgErr(c.bindError)
+		}
+		return false, err
 	}
 	c.bindAttempted = true
 	if berr := c.bindPackage(ctx); berr != nil {
 		c.trace("auto-bind failed: %v", berr)
 		c.bindError = berr
-		return false
+		return false, pkgErr(berr)
 	}
-	return true
+	return true, nil
 }

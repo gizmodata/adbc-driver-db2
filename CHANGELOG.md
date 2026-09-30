@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-30
+
+### Fixed
+
+- **SQL0805N (package not found) now says why the package could not be
+  created.** When the dynamic-SQL package (default `NULLID.SYSSH200`) is
+  missing, as on Db2 for i / z/OS, the driver binds it automatically; if
+  that bind failed (e.g. SQL0552N, no authority to bind, or the `NULLID`
+  library missing on Db2 for i), the failure was swallowed and only a
+  bare `SQLCODE=-805 ... NULLID.SYSSH200` reached the caller. The error
+  now includes the bind failure plus remediation (have a DBA create the
+  package, or set `adbc.db2.package` to a collection you may bind in),
+  and ADBC errors keep context wrapped around the SQLCA.
+- Bind failures report the server's SQLCA (the actual reason) instead
+  of the generic `BGNBNDRM` reply message.
+- Multi-token SQLCA messages from Db2 LUW (tokens separated by `0xFF`)
+  are no longer decoded as EBCDIC garbage (`+!âñ+à` → `NOBIND, BIND`).
+
 ## [0.2.0] - 2026-09-01
 
 ### Fixed

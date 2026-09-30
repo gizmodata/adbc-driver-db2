@@ -45,8 +45,11 @@ func (c *Conn) Query(ctx context.Context, sql string) (*Query, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	q, err := c.queryLocked(ctx, sql)
-	if err != nil && c.autoBind(ctx, err) {
-		q, err = c.queryLocked(ctx, sql)
+	if err != nil {
+		var retry bool
+		if retry, err = c.autoBind(ctx, err); retry {
+			q, err = c.queryLocked(ctx, sql)
+		}
 	}
 	return q, err
 }

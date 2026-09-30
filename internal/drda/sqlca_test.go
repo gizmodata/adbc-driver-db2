@@ -40,6 +40,23 @@ func TestParseSQLCARD_ASCII(t *testing.T) {
 	require.Equal(t, "DB2INST1.T", ca.Message)
 }
 
+// Message tokens are separated by 0xFF; a raw 0xFF must not tip an
+// ASCII message into being decoded as EBCDIC (SQL0552N from a failed
+// package bind came back as "+!âñ+à").
+func TestParseSQLCARD_TokenSeparator(t *testing.T) {
+	body := buildSQLCARD(-552, []byte("42502"), []byte("SQLRA13A"), []byte("NOBIND\xffBIND"), false)
+	ca, err := ParseSQLCARD(body, true)
+	require.NoError(t, err)
+	require.Equal(t, "NOBIND, BIND", ca.Message)
+
+	msg := append(ddm.EncodeEBCDIC("NOBIND"), 0xFF)
+	msg = append(msg, ddm.EncodeEBCDIC("BIND")...)
+	body = buildSQLCARD(-552, ddm.EncodeEBCDIC("42502"), ddm.PadEBCDIC("QSQRUN", 8), msg, true)
+	ca, err = ParseSQLCARD(body, false)
+	require.NoError(t, err)
+	require.Equal(t, "NOBIND, BIND", ca.Message)
+}
+
 // Db2 for z/OS and Db2 for i flow SQLCA character fields in EBCDIC with
 // big-endian integers.
 func TestParseSQLCARD_EBCDIC(t *testing.T) {
