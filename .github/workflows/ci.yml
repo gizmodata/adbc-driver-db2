@@ -46,6 +46,11 @@ jobs:
           cache: false
       - name: Start Db2
         run: |
+          # Registry hiccups (icr.io especially) fail a bare docker run;
+          # pull with retries first.
+          for img in icr.io/db2_community/db2; do
+            for i in 1 2 3 4 5; do docker pull "$img" && break; [ $i = 5 ] && exit 1; sleep $((i * 15)); done
+          done
           docker run -d --name db2 --privileged=true -p 50000:50000 \
             -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb \
             icr.io/db2_community/db2
@@ -83,6 +88,11 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Start Db2 and GizmoSQL
         run: |
+          # Registry hiccups (icr.io especially) fail a bare docker run;
+          # pull with retries first.
+          for img in icr.io/db2_community/db2 gizmodata/gizmosql:latest; do
+            for i in 1 2 3 4 5; do docker pull "$img" && break; [ $i = 5 ] && exit 1; sleep $((i * 15)); done
+          done
           docker run -d --name db2 --privileged=true -p 50000:50000 \
             -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb \
             icr.io/db2_community/db2
