@@ -1,4 +1,4 @@
-# adbc-driver-db2
+# adbc-driver-db2 - by [GizmoData™](https://gizmodata.com)
 
 [<img src="https://img.shields.io/badge/GitHub-gizmodata%2Fadbc--driver--db2-blue.svg?logo=Github">](https://github.com/gizmodata/adbc-driver-db2)
 [![CI](https://github.com/gizmodata/adbc-driver-db2/actions/workflows/ci.yml/badge.svg)](https://github.com/gizmodata/adbc-driver-db2/actions/workflows/ci.yml)
@@ -8,6 +8,7 @@
 [![PyPI version](https://badge.fury.io/py/adbc-driver-db2.svg)](https://badge.fury.io/py/adbc-driver-db2)
 [![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-db2.svg)](https://pypi.org/project/adbc-driver-db2/)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-db2)](LICENSE)
+[![Hardcharger](https://img.shields.io/badge/works%20with-Hardcharger%E2%84%A2-f15a24.svg)](https://gizmodata.com/hardcharger)
 
 A **pure-Go [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for
 IBM Db2** that speaks Db2's native wire protocol,
@@ -105,32 +106,50 @@ with db2.connect(uri=uri, username=user, password=pw) as conn, conn.cursor() as 
         process(batch)
 ```
 
-### Db2 → GizmoSQL (or any ADBC target), ADBC to ADBC
+### Db2 → Hardcharger (or any ADBC target), ADBC to ADBC
 
 The reader above can be handed straight to another driver's bulk ingest,
-so a table moves from Db2 into [GizmoSQL](https://gizmodata.com/gizmosql)
-without ever being materialised on the client:
+so a table moves from Db2 into [Hardcharger™](https://gizmodata.com/hardcharger),
+GizmoData's DuckDB 2.0 server, without ever being materialised on the client:
+
+```sh
+pip install adbc-driver-db2 adbc-driver-hardcharger
+```
 
 ```python
 import adbc_driver_db2.dbapi as db2
-import adbc_driver_gizmosql.dbapi as gizmosql
+from adbc_driver_hardcharger import dbapi as hardcharger
 
 with db2.connect(uri=db2_uri, username=db2_user, password=db2_pw) as src, \
-     gizmosql.connect(gizmosql_uri, username="token", password=token) as dst:
+     hardcharger.connect(uri="hardcharger://hardcharger.example.com", username="app", password=password) as dst:
     with src.cursor() as s, dst.cursor() as d:
-        s.execute("SELECT * FROM SALES.ORDERS")
+        s.execute(operation="SELECT * FROM SALES.ORDERS")
         rows = d.adbc_ingest(table_name="orders", data=s.fetch_record_batch(), mode="replace")
         dst.commit()
         print(f"Loaded {rows:,} rows")
 ```
 
-**Batch sizing.** Each Arrow record batch becomes one Flight SQL `DoPut`
-message on the GizmoSQL side, and the GizmoSQL driver's gRPC client caps
-messages at 16 MiB by default. The Db2 driver's batches are Flight-safe
-out of the box: a batch is capped at 65,536 rows (`batch_size`) **and**
-8 MiB (`batch_bytes`), so even very wide tables stream through without
-tripping the cap. Both knobs are tunable (URI parameter or `adbc.db2.*`
-in `db_kwargs`):
+Hardcharger sends the ingest over several connections at once and commits it as one,
+so the rows land in no particular order. (`python/tests/test_db2_to_hardcharger.py`
+runs exactly this against a live Db2 + [Hardcharger](https://gizmodata.com/hardcharger)
+pair in CI; Hardcharger is a test-only dependency — the driver itself has no Hardcharger code.)
+
+To try it without a server of your own, `pip install "hardcharger[adbc]"` runs a local
+[Hardcharger](https://gizmodata.com/hardcharger) from Python:
+
+```python
+import hardcharger
+
+with hardcharger.Server() as server, server.connect() as dst:
+    ...  # dst is a Hardcharger connection, as above
+```
+
+**Batch sizing.** Each Arrow record batch becomes one Arrow IPC message on the
+ingest side. [Hardcharger](https://gizmodata.com/hardcharger) accepts messages up to its
+`max_ingest_message_bytes` (64 MiB by default), and Flight SQL targets usually cap gRPC
+messages at 16 MiB. The Db2 driver's batches fit both out of the box: a batch is capped
+at 65,536 rows (`batch_size`) **and** 8 MiB (`batch_bytes`), so even very wide tables
+stream through. Both knobs are tunable (URI parameter or `adbc.db2.*` in `db_kwargs`):
 
 ```python
 src = db2.connect(uri=db2_uri + "?batch_bytes=4194304", username=db2_user, password=db2_pw)
@@ -139,13 +158,10 @@ src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_bytes": str(4 * 1024 *
                   username=db2_user, password=db2_pw)
 ```
 
-`batch_bytes=0` removes the byte cap (batches then bound only by
-`batch_size` rows — a pre-0.2 default that could exceed 16 MiB for rows
-wider than ~825 bytes and fail ingest with `ResourceExhausted: trying to
-send message larger than max`). To move *more* than 8 MiB per message,
-also raise the GizmoSQL client's gRPC cap with
-`adbc.flight.sql.client_option.with_max_msg_size` — see the
-[GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
+`batch_bytes=0` removes the byte cap (batches then bound only by `batch_size` rows, a
+pre-0.2 default). Rows wider than about 1 KiB can then make a batch larger than 64 MiB,
+which Hardcharger refuses with HTTP 413 `payload_too_large`; keep the cap, or raise the
+server's `max_ingest_message_bytes`.
 
 ### Bulk ingest (Arrow → Db2)
 
@@ -190,18 +206,21 @@ with db2.connect(uri=uri, username=user, password=pw, autocommit=True) as conn, 
     print(cur.fetchone())
 ```
 
-### Query Db2 live from DuckDB or GizmoSQL (`adbc_scanner`)
+### Query Db2 live from Hardcharger or DuckDB (`adbc_scanner`)
 
-The c-shared driver plugs straight into DuckDB's
-[`adbc_scanner`](https://github.com/Query-farm/adbc_scanner) community
-extension (see the [GizmoSQL guide](https://docs.gizmosql.com/adbc_scanner_duckdb/)) — and therefore into [GizmoSQL](https://gizmodata.com/gizmosql),
-which embeds DuckDB. Store the credentials in a DuckDB secret once, then
-`ATTACH` Db2 like any other database and query it with plain SQL
-(projection and filter pushdown included):
+The c-shared driver plugs straight into the
+[`adbc_scanner`](https://query.farm/products/extensions/adbc_scanner/) extension, so
+[Hardcharger](https://gizmodata.com/hardcharger) and DuckDB can query Db2 live. Store the
+credentials in a secret once, then `ATTACH` Db2 like any other database and query it with
+plain SQL (projection and filter pushdown included). On DuckDB 2.0 and later (and so on
+every Hardcharger) the extension comes from the Query.Farm extension repository:
 
 ```sql
-INSTALL adbc_scanner FROM community;
-LOAD adbc_scanner;
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm WITH PREFIX 'https://duckdb-extensions.query.farm';
+INSTALL adbc_scanner FROM query_farm;
+LOAD adbc_scanner FROM query_farm;   -- in each session
+-- (DuckDB 1.x: INSTALL adbc_scanner FROM community; LOAD adbc_scanner;)
 
 CREATE SECRET db2_secret (
     TYPE adbc,
@@ -222,30 +241,34 @@ SELECT o.ORDER_ID, c.name
 FROM db2.SALES.ORDERS o
 JOIN customers c ON c.id = o.CUST_ID;
 
--- materialise a local copy in DuckDB
+-- materialise a local copy
 CREATE TABLE orders AS SELECT * FROM db2.SALES.ORDERS;
 
 -- push (the simple way): write straight into Db2 through the attached
 -- catalog with plain SQL — USE the Db2 schema, then CREATE TABLE ... AS
 USE db2.DB2INST1;
-CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.local_orders;   -- CTAS into Db2
-USE memory;
+CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.main.local_orders;   -- CTAS into Db2
+USE memory;                          -- back to your own catalog
 ```
 
-For arbitrary Db2 SQL (or to push data the other way) the secret also
-drives the function API:
+For arbitrary Db2 SQL (or to push data the other way) the function API takes the
+attached database's name:
 
 ```sql
-SET VARIABLE db2 = adbc_connect({'secret': 'db2_secret'});
-SELECT * FROM adbc_scan(getvariable('db2')::BIGINT, 'SELECT * FROM SYSCAT.TABLES FETCH FIRST 10 ROWS ONLY');
-SELECT * FROM adbc_insert(getvariable('db2')::BIGINT, 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
+SELECT * FROM adbc_scan('db2', 'SELECT * FROM SYSCAT.TABLES FETCH FIRST 10 ROWS ONLY');
+SELECT * FROM adbc_insert('db2', 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
 ```
+
+In Hardcharger the driver is loaded by the server, so `driver` names a library (or an
+installed manifest) on the server's machine. The `ghcr.io/gizmodata/hardcharger:latest-adbc`
+image ships this driver with its manifest, so `driver 'db2'` works there as is.
 
 Both write paths work: `USE <attached schema>; CREATE TABLE ... AS ...` (and
 `INSERT INTO ...`) through the attached catalog, or the `adbc_insert()`
-function for arbitrary relations.
+function for arbitrary relations. `python/tests/test_adbc_scanner.py` runs reads and
+both write paths inside a Hardcharger server and in an embedded DuckDB.
 
-Credentials can live in a self-contained DuckDB secret (above) or in an ADBC
+Credentials can live in a self-contained secret (above) or in an ADBC
 connection profile — `adbc_scanner` resolves `profile://…` URIs too, so
 profiles are not specific to any one extension (the connection-profiles
 section below shows the profile setup).
@@ -253,7 +276,7 @@ section below shows the profile setup).
 ### Query Db2 from DuckDB via connection profiles (Columnar's `adbc` extension)
 
 Columnar's [`adbc`](https://github.com/columnar-tech/duckdb-adbc-client)
-community extension (see the [GizmoSQL guide](https://docs.gizmosql.com/adbc_duckdb_extension/))
+community extension (`INSTALL adbc FROM community`)
 resolves databases through ADBC
 [connection profiles](https://arrow.apache.org/adbc/main/format/connection_profiles.html),
 and additionally supports writing (`INSERT`, `CREATE TABLE AS`) into the
@@ -310,7 +333,7 @@ python -m adbc_driver_db2 install-manifest
 
 writes a `db2.toml` ADBC driver manifest so the driver resolves by name
 from any ADBC consumer — `adbc_driver_manager.dbapi.connect(uri="db2://...")`,
-DuckDB's `adbc_connect({'driver': 'db2', ...})`, DBeaver's ADBC
+Hardcharger's and DuckDB's `adbc_scanner` secrets (`driver 'db2'`), DBeaver's ADBC
 connection type — and from connection profiles:
 
 ```toml
@@ -431,3 +454,12 @@ software this driver interoperates with and are nominative fair use.
 
 [MIT](LICENSE) — Copyright (c) 2026 GizmoData LLC. See [`NOTICE`](NOTICE) for
 third-party attributions.
+
+---
+
+<p align="center">
+  <a href="https://gizmodata.com"><img src="https://raw.githubusercontent.com/gizmodata/adbc-driver-db2/main/docs/assets/gizmodata-logo.png" alt="GizmoData™" width="56"></a><br>
+  <sub>Built by <a href="https://gizmodata.com">GizmoData™</a>, makers of <a href="https://gizmodata.com/hardcharger">Hardcharger™</a>. Free and open source.</sub>
+</p>
+
+<p align="center"><sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub></p>

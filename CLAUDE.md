@@ -41,12 +41,19 @@ debugging.
   DRDA integration tests, ADBC driver tests, and `TestValidation`, the
   upstream arrow-adbc conformance suite. Keep it passing.
 - Python: build the c-shared lib, copy it into `python/adbc_driver_db2/`,
-  `pip install -e ".[test]"`, `DB2_HOST=localhost pytest`. The
-  `test_db2_to_gizmosql.py` test also needs `GIZMOSQL_URI` (+ token or
-  password) and mirrors the data-ingestion notebook flow this driver exists for.
+  `pip install -e ".[test,hardcharger]"`, `DB2_HOST=localhost pytest`.
+  `test_db2_to_hardcharger.py` (the data-ingestion notebook flow this driver
+  exists for) and the `[hardcharger]` cases of `test_adbc_scanner.py` need a
+  [Hardcharger](https://gizmodata.com/hardcharger) 2.1+ server: the one named by
+  `ADBC_DB2_TEST_HARDCHARGER_URI` (+ `_USERNAME`/`_PASSWORD`, default
+  `hardcharger`/`hardcharger`, and `_DRIVER_PATH`: this driver's library as the
+  *server* sees it), which must answer or the tests fail; otherwise one started
+  from the `hardcharger` PyPI package (Python 3.11+). `test_adbc_scanner.py` runs
+  every case in Hardcharger and in an embedded DuckDB; on DuckDB 2.0+ (every
+  Hardcharger) `adbc_scanner` installs from the Query.Farm repository.
 - Local servers: `icr.io/db2_community/db2` (amd64; ~10 min first start;
-  offers SECMEC 3 only) and `gizmodata/gizmosql` (`TLS_ENABLED=0`,
-  URI `gizmosql://localhost:31337?transport=tcp`).
+  offers SECMEC 3 only). CI runs `ghcr.io/gizmodata/hardcharger:latest` with
+  `--network host` and `pkg/db2` mounted at `/drivers`.
 - Security semantics (mirror the Oracle driver's NNE posture): an
   *explicitly* set `adbc.db2.security_mechanism` fails closed — the
   handshake errors instead of renegotiating when the server counters
@@ -80,7 +87,7 @@ debugging.
 
 ## Conventions
 
-- Go 1.26 floor, Arrow Go v18, arrow-adbc v1.12 (keep in step with gizmosql-adbc).
+- Go 1.26 floor, Arrow Go v18, arrow-adbc v1.13 (keep in step with hardcharger-adbc).
 - Options: `adbc.db2.<noun>`; driver name "ADBC Db2 Driver - Go".
 - Keep `CHANGELOG.md` `[Unreleased]` current; semver tags `vX.Y.Z`;
   bump `driver/db2/version.go` and `python/adbc_driver_db2/_version.py`

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-27
+
+### Changed
+
+- The README's cross-tool examples and the cross-tool tests use
+  [Hardcharger](https://gizmodata.com/hardcharger) (GizmoData's DuckDB 2.0 server) instead of
+  GizmoSQL: Db2 → Hardcharger streaming ingest, and `adbc_scanner` reads and writes run both
+  inside a Hardcharger server and in an embedded DuckDB. Test settings are now
+  `ADBC_DB2_TEST_HARDCHARGER_*`; without them the tests start a server from the `hardcharger`
+  PyPI package (`pip install -e ".[test,hardcharger]"`). The driver itself is unchanged.
+- README: `adbc_scanner` for DuckDB 2.0 and later (and so Hardcharger) installs from the Query.Farm
+  extension repository, and its function API takes the attached database's name
+  (`adbc_scan('db2', ...)`); the extension removed `adbc_connect` / `adbc_disconnect`, which the
+  old example and tests still used. Batch sizing is described against Hardcharger's 64 MiB ingest
+  message limit.
+- Dependencies: arrow-adbc Go 1.13.0 (was 1.12.0), arrow-go 18.8.0 (was 18.7.0) and their
+  dependencies. CI builds with Go 1.27.3 (was 1.26.7; the module's Go 1.26 floor is unchanged).
+  Test extras: pytest 9.1, DuckDB 2.0 and pandas 3.1 (Python 3.10 keeps their last releases for
+  it). The runtime floors (`adbc-driver-manager`, `pyarrow`) are unchanged, so the wheel still
+  installs next to older versions.
+
 ## [0.2.1] - 2026-09-30
 
 ### Fixed
