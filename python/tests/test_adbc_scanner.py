@@ -4,7 +4,7 @@ and embedded DuckDB reading from and writing to Db2 *live* through the
 
     Hardcharger / duckdb  ──adbc_scanner──▶  libadbc_driver_db2  ──DRDA──▶  Db2
 
-Every test runs twice: inside a Hardcharger server (the SQL goes over Warp SQL
+Every test runs twice: inside a Hardcharger server (the SQL goes over Chargewire
 and the server loads the driver) and in an in-process DuckDB. On DuckDB 2.0
 and later (every Hardcharger) the extension comes from the Query.Farm
 repository; DuckDB 1.x installs it from community.
