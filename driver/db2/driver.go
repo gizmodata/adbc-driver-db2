@@ -51,6 +51,11 @@ type databaseImpl struct {
 }
 
 func (d *databaseImpl) SetOptions(opts map[string]string) error {
+	for k := range opts {
+		if !isDatabaseOption(k) {
+			return errStatus(adbc.StatusNotImplemented, "unknown database option %q", k)
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for k, v := range opts {
@@ -199,7 +204,20 @@ func (c *connectionImpl) SetOption(key, value string) error {
 		}
 		return nil
 	case adbc.OptionKeyCurrentDbSchema:
-		_, err := c.conn.ExecImmediate(context.Background(), "SET CURRENT SCHEMA "+quoteIdent(value))
+		// Db2 accepts SET CURRENT SCHEMA for a schema that does not exist
+		// (it is just a special register), so a misspelled name would go
+		// unnoticed until the next unqualified statement. ADBC reports
+		// NOT_FOUND instead. Running SET CURRENT SCHEMA as SQL still works
+		// for a schema that a later CREATE will create implicitly.
+		_, rows, err := c.queryAll(context.Background(),
+			"SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = "+sqlString(value))
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return errStatus(adbc.StatusNotFound, "db2: schema %q does not exist", value)
+		}
+		_, err = c.conn.ExecImmediate(context.Background(), "SET CURRENT SCHEMA "+quoteIdent(value))
 		if err != nil {
 			return fromDRDAError(err)
 		}

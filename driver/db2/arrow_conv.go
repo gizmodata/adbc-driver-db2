@@ -79,11 +79,11 @@ func arrowFieldFor(col drda.ColumnDesc) arrow.Field {
 		}
 		typeName = fmt.Sprintf("TIMESTAMP(%d)", frac)
 	case drda.SQLTypeChar:
-		dt, typeName = arrow.BinaryTypes.String, fmt.Sprintf("CHAR(%d)", col.Length)
+		dt, typeName = charType(col, fmt.Sprintf("CHAR(%d)", col.Length))
 	case drda.SQLTypeVarchar:
-		dt, typeName = arrow.BinaryTypes.String, fmt.Sprintf("VARCHAR(%d)", col.Length)
+		dt, typeName = charType(col, fmt.Sprintf("VARCHAR(%d)", col.Length))
 	case drda.SQLTypeLongVarchar:
-		dt, typeName = arrow.BinaryTypes.String, "LONG VARCHAR"
+		dt, typeName = charType(col, "LONG VARCHAR")
 	case drda.SQLTypeGraphic:
 		dt, typeName = arrow.BinaryTypes.String, fmt.Sprintf("GRAPHIC(%d)", col.Length)
 	case drda.SQLTypeVargraphic:
@@ -112,6 +112,16 @@ func arrowFieldFor(col drda.ColumnDesc) arrow.Field {
 		[]string{typeName, strconv.FormatInt(col.Length, 10), strconv.Itoa(int(col.Precision)), strconv.Itoa(int(col.Scale))},
 	)
 	return arrow.Field{Name: col.Name, Type: dt, Nullable: col.Nullable(), Metadata: md}
+}
+
+// charType maps a CHAR / VARCHAR / LONG VARCHAR column. A FOR BIT DATA
+// column (SQLDA CCSID 0, or 65535 on Db2 for i) holds raw bytes, not text,
+// so it maps to Arrow binary; as a string it would carry invalid UTF-8.
+func charType(col drda.ColumnDesc, name string) (arrow.DataType, string) {
+	if col.CCSID == 0 || col.CCSID == 65535 {
+		return arrow.BinaryTypes.Binary, name + " FOR BIT DATA"
+	}
+	return arrow.BinaryTypes.String, name
 }
 
 // schemaFor builds the Arrow schema for a result set.

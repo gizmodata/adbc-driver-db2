@@ -13,6 +13,9 @@ import (
 // ---- database ----
 
 func (d *databaseImpl) SetOption(key, value string) error {
+	if !isDatabaseOption(key) {
+		return errStatus(adbc.StatusNotImplemented, "unknown database option %q", key)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.opts[key] = value

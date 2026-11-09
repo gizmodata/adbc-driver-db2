@@ -247,12 +247,21 @@ func (d *RowDecoder) decodeField(r *byteReader, f FieldDesc) Value {
 		// 4-byte locator; the driver does not dereference locators.
 		_ = r.take(int(f.Length))
 		return LobRef{IsChar: base != TypeLobLoc}
-	case TypeLobBytes:
-		_ = r.take(int(f.Length & 0x7FFF))
-		return LobRef{IsChar: false}
-	case TypeLobCSBCS:
-		_ = r.take(int(f.Length & 0x7FFF))
-		return LobRef{IsChar: true}
+	case TypeLobBytes, TypeLobCSBCS:
+		// The placeholder holds the LOB's length (big-endian). The bytes
+		// follow out of line in an EXTDTA, except for an empty LOB, for
+		// which the server sends no EXTDTA at all.
+		var n uint64
+		for _, b := range r.take(int(f.Length & 0x7FFF)) {
+			n = n<<8 | uint64(b)
+		}
+		if n == 0 {
+			if base == TypeLobCSBCS {
+				return ""
+			}
+			return []byte{}
+		}
+		return LobRef{IsChar: base == TypeLobCSBCS}
 	default:
 		r.fail("drda: unsupported FD:OCA type 0x%02X", f.Type)
 		return nil

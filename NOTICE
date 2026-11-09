@@ -15,6 +15,12 @@ It is built on the Apache Arrow ADBC Go framework
 library (https://github.com/apache/arrow-go, Apache-2.0); those libraries
 ship under their own license terms.
 
+The test harness under validation/ (not shipped in the wheel) adapts test
+glue from the ADBC Driver Foundry's validation suite and drivers
+(https://github.com/adbc-drivers, Apache-2.0, Copyright (c) 2025-2026 ADBC
+Drivers Contributors); those files keep their Apache-2.0 headers. The suite
+itself is a test dependency, installed from its own repository.
+
 No confidential IBM Corporation specification, non-public documentation, or
 disassembly of any IBM Corporation binary was used in creating this software.
 The DRDA (Distributed Relational Database Architecture) specification is an

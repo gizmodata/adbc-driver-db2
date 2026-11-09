@@ -1,0 +1,61 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+// Copyright (c) 2026 GizmoData LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// part: metadata
+
+[setup]
+drop = "TEST_TIMESTAMPTZ"
+
+[tags]
+sql-type-name = "TIMESTAMP(0)"
+caveats = ["Db2 for LUW has no TIMESTAMP WITH TIME ZONE: a time-zone-aware Arrow timestamp is stored in TIMESTAMP as UTC and reads back without a time zone"]
+
+// part: setup_query
+
+CREATE TABLE test_timestamptz (
+    idx INT,
+    res TIMESTAMP(0),
+    res2 TIMESTAMP(0)
+);
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "RES",
+            "format": "tss:",
+            "flags": [
+                "nullable"
+            ]
+        },
+        {
+            "name": "RES2",
+            "format": "tss:",
+            "flags": [
+                "nullable"
+            ]
+        }
+    ]
+}
+
+// part: expected
+
+{"RES": null, "RES2": null}
+{"RES": -14182940, "RES2": -14182940}
+{"RES": 946684800, "RES2": 946684800}
+{"RES": 1684158330, "RES2": 1684158330}
+{"RES": 253402300799, "RES2": 253402300799}

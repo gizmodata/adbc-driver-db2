@@ -44,16 +44,23 @@ func (q *db2Quirks) SupportsBulkIngest(mode string) bool {
 	return false
 }
 
-func (q *db2Quirks) SupportsConcurrentStatements() bool          { return true }
-func (q *db2Quirks) SupportsCurrentCatalogSchema() bool          { return true }
-func (q *db2Quirks) SupportsGetSetOptions() bool                 { return true }
-func (q *db2Quirks) SupportsExecuteSchema() bool                 { return true }
-func (q *db2Quirks) SupportsPartitionedData() bool               { return false }
-func (q *db2Quirks) SupportsStatistics() bool                    { return false }
-func (q *db2Quirks) SupportsTransactions() bool                  { return true }
-func (q *db2Quirks) SupportsGetParameterSchema() bool            { return true }
-func (q *db2Quirks) SupportsDynamicParameterBinding() bool       { return true }
-func (q *db2Quirks) SupportsErrorIngestIncompatibleSchema() bool { return true }
+func (q *db2Quirks) SupportsConcurrentStatements() bool    { return true }
+func (q *db2Quirks) SupportsCurrentCatalogSchema() bool    { return true }
+func (q *db2Quirks) SupportsGetSetOptions() bool           { return true }
+func (q *db2Quirks) SupportsExecuteSchema() bool           { return true }
+func (q *db2Quirks) SupportsPartitionedData() bool         { return false }
+func (q *db2Quirks) SupportsStatistics() bool              { return false }
+func (q *db2Quirks) SupportsTransactions() bool            { return true }
+func (q *db2Quirks) SupportsGetParameterSchema() bool      { return true }
+func (q *db2Quirks) SupportsDynamicParameterBinding() bool { return true }
+
+// SupportsErrorIngestIncompatibleSchema turns off arrow-adbc's Go
+// "overwrite and incompatible schema" subtest, which hard-codes
+// StatusInternal for a create on an existing table. The ADBC spec and the
+// adbc-drivers.org suite (validation/) expect ALREADY_EXISTS there, and
+// arrow-adbc's C++ suite accepts any error; TestIngestAppendSchemaMismatch
+// covers the same cases with the stricter statuses.
+func (q *db2Quirks) SupportsErrorIngestIncompatibleSchema() bool { return false }
 
 func (q *db2Quirks) GetMetadata(code adbc.InfoCode) interface{} {
 	switch code {
@@ -62,7 +69,7 @@ func (q *db2Quirks) GetMetadata(code adbc.InfoCode) interface{} {
 	case adbc.InfoDriverName:
 		return DriverName
 	case adbc.InfoDriverArrowVersion:
-		return "arrow-go/v18"
+		return arrowVersion()
 	case adbc.InfoVendorSql:
 		return true
 	case adbc.InfoVendorSubstrait:

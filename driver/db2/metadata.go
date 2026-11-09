@@ -128,6 +128,28 @@ func driverVersion() string {
 	return Version
 }
 
+// arrowModule is the Arrow Go module whose version GetInfo reports.
+const arrowModule = "github.com/apache/arrow-go/v18"
+
+// arrowVersion reports the arrow-go release linked into this build (e.g.
+// "v18.8.0"), read from the module build info; "v18" if that is missing.
+func arrowVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path != arrowModule {
+				continue
+			}
+			if dep.Replace != nil && dep.Replace.Version != "" {
+				return dep.Replace.Version
+			}
+			if dep.Version != "" {
+				return dep.Version
+			}
+		}
+	}
+	return "v18"
+}
+
 func (c *connectionImpl) getInfoImpl(ctx context.Context, infoCodes []adbc.InfoCode) (array.RecordReader, error) {
 	if len(infoCodes) == 0 {
 		infoCodes = supportedInfoCodes
@@ -163,7 +185,7 @@ func (c *connectionImpl) getInfoImpl(ctx context.Context, infoCodes []adbc.InfoC
 			strBldr.Append(driverVersion())
 		case adbc.InfoDriverArrowVersion:
 			valueBldr.Append(int8(adbc.InfoValueStringType))
-			strBldr.Append("arrow-go/v18")
+			strBldr.Append(arrowVersion())
 		case adbc.InfoDriverADBCVersion:
 			valueBldr.Append(int8(adbc.InfoValueInt64Type))
 			int64Bldr.Append(adbc.AdbcVersion1_1_0)

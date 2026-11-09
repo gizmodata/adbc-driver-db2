@@ -236,15 +236,27 @@ func xdbcDataType(typeName string) int16 {
 	return 1111
 }
 
-// listConstraints loads primary/unique/foreign keys for the schema.
+// listConstraints loads primary/unique/foreign keys and check constraints
+// for the schema. Key columns come from SYSCAT.KEYCOLUSE; check constraints
+// (SYSCAT.CHECKS, TYPE 'C') are not in it, so their columns come from
+// SYSCAT.COLCHECKS (USAGE 'R': columns the condition references). A check
+// that references no column is listed with no column names.
 func (c *connectionImpl) listConstraints(ctx context.Context, schema string, tableFilter *string) (map[string][]constraintInfo, error) {
 	sb := strings.Builder{}
-	sb.WriteString(`SELECT K.TABNAME, K.CONSTNAME, T.TYPE, K.COLNAME, K.COLSEQ
+	sb.WriteString(`SELECT TABNAME, CONSTNAME, TYPE, COLNAME, COLSEQ FROM (
+SELECT K.TABNAME, K.CONSTNAME, T.TYPE, K.COLNAME, K.COLSEQ
 FROM SYSCAT.KEYCOLUSE K JOIN SYSCAT.TABCONST T ON T.TABSCHEMA = K.TABSCHEMA AND T.TABNAME = K.TABNAME AND T.CONSTNAME = K.CONSTNAME
 WHERE K.TABSCHEMA = `)
 	sb.WriteString(sqlString(schema))
 	appendLikeQual(&sb, "K.TABNAME", tableFilter)
-	sb.WriteString(" ORDER BY K.TABNAME, K.CONSTNAME, K.COLSEQ")
+	sb.WriteString(`
+UNION ALL
+SELECT C.TABNAME, C.CONSTNAME, CAST('K' AS CHAR(1)), CC.COLNAME, 0
+FROM SYSCAT.CHECKS C LEFT JOIN SYSCAT.COLCHECKS CC ON CC.TABSCHEMA = C.TABSCHEMA AND CC.TABNAME = C.TABNAME AND CC.CONSTNAME = C.CONSTNAME AND CC.USAGE = 'R'
+WHERE C.TYPE = 'C' AND C.TABSCHEMA = `)
+	sb.WriteString(sqlString(schema))
+	appendLikeQual(&sb, "C.TABNAME", tableFilter)
+	sb.WriteString(") X ORDER BY TABNAME, CONSTNAME, COLSEQ, COLNAME")
 	_, rows, err := c.queryAll(ctx, sb.String())
 	if err != nil {
 		return nil, err
@@ -270,7 +282,9 @@ WHERE K.TABSCHEMA = `)
 			byKey[k] = ci
 			order = append(order, k)
 		}
-		ci.ConstraintColumnNames = append(ci.ConstraintColumnNames, strings.TrimSpace(asString(r[3])))
+		if r[3] != nil { // nil: a check constraint that references no column
+			ci.ConstraintColumnNames = append(ci.ConstraintColumnNames, strings.TrimSpace(asString(r[3])))
+		}
 	}
 
 	// Foreign-key targets.

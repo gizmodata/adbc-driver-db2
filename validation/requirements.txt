@@ -1,0 +1,3 @@
+# The adbc-drivers.org conformance suite, pinned to the commit this driver was
+# validated against. Bump deliberately and re-run the suite when moving it.
+adbc-drivers-validation @ git+https://github.com/adbc-drivers/validation@f0631651f79bd01b67c5776be6fe3b7fbfbe083b

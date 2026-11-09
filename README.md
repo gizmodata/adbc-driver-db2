@@ -56,7 +56,9 @@ with db2.connect(
   declared temporary tables), transactions and isolation levels,
   `GetObjects`/`GetTableSchema`/`GetInfo` catalog metadata for tools
   like DBeaver, connection profiles, and the ADBC driver manifest.
-  The driver passes the `apache/arrow-adbc` Go conformance suite.
+  The driver passes the `apache/arrow-adbc` Go conformance suite and the
+  open [ADBC validation suite](https://github.com/adbc-drivers/validation)
+  (`validation/`, run in CI against a real Db2 before every release).
 
 ## Connection URI and options
 
@@ -177,7 +179,14 @@ Rows are pipelined many per DRDA round trip (1000 by default;
 `adbc.db2.ingest.batch_rows`). `VARCHAR`/`VARBINARY` columns of a created
 table are sized from the first batch (`adbc.db2.ingest.varchar_length`
 overrides) because Db2's row-size limit depends on the tablespace page
-size. Values over 32 KiB are sent as out-of-line BLOB/CLOB data.
+size; values longer than a VARCHAR can hold (32,672 bytes) get a
+`CLOB`/`BLOB` column instead. Values over 32 KiB are sent as out-of-line
+BLOB/CLOB data. Db2 has no negative decimal scale, so `decimal(p, -s)` is
+created as `DECIMAL(p+s, 0)` holding the same values.
+
+Appending data with a column the table doesn't have fails with
+`ALREADY_EXISTS` (as does `create` on an existing table) and appending to a
+missing table with `NOT_FOUND`, as ADBC specifies.
 
 ### pandas and Polars
 
@@ -395,9 +404,15 @@ ADBC layer sits on.
 | REAL / DOUBLE | float32 / float64 |
 | BOOLEAN | bool |
 | CHAR, VARCHAR, LONG VARCHAR, (VAR)GRAPHIC, CLOB, DBCLOB, XML | utf8 |
-| BINARY, VARBINARY, BLOB, ROWID | binary |
+| BINARY, VARBINARY, BLOB, ROWID, CHAR/VARCHAR FOR BIT DATA | binary |
 | DATE / TIME | date32 / time32[s] |
 | TIMESTAMP(p) | timestamp[s/ms/us/ns] by precision |
+
+When binding parameters or ingesting: Db2 `TIME` has whole-second precision,
+so an Arrow time with a fractional second is refused rather than truncated;
+Db2 for LUW has no `TIMESTAMP WITH TIME ZONE`, so a time-zone-aware Arrow
+timestamp is stored in `TIMESTAMP` as UTC (whatever its display zone) and
+reads back without a time zone.
 
 Every field carries `db2:type`, `db2:length`, `db2:precision`,
 `db2:scale` metadata; a schema produced by this driver round-trips
@@ -411,7 +426,17 @@ DB2_HOST=localhost go test ./...                # integration + ADBC conformance
 go build -buildmode=c-shared -tags driverlib -o pkg/db2/libadbc_driver_db2.dylib ./pkg/db2
 ADBC_DB2_LIBRARY=$PWD/pkg/db2/libadbc_driver_db2.dylib pip install -e ".[test]"
 DB2_HOST=localhost pytest
+
+# The ADBC validation suite (validation/; Python 3.13+, pinned in
+# validation/requirements.txt), against the library built above:
+uv venv --python 3.14 validation/.venv
+uv pip install --python validation/.venv/bin/python -r validation/requirements.txt
+cd validation && ADBC_DB2_TEST_URI=db2://db2inst1:password@127.0.0.1:50000/testdb .venv/bin/pytest tests
 ```
+
+The validation suite fails (it never skips) when `ADBC_DB2_TEST_URI` is unset
+or the server can't be reached; it creates the `ADBC_VALIDATION_SECONDARY`
+schema and, if the database has none, a user temporary tablespace.
 
 A Db2 for testing: `docker run -d -p 50000:50000 --privileged -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb icr.io/db2_community/db2`
 (first start takes ~10 minutes). `go run ./cmd/drda-sniff` is a

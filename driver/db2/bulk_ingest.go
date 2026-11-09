@@ -181,7 +181,7 @@ func (s *statementImpl) prepareIngestTarget(ctx context.Context, schema *arrow.S
 		mode = adbc.OptionValueIngestModeCreate
 	}
 	if mode == adbc.OptionValueIngestModeAppend {
-		return nil
+		return s.checkAppendSchema(ctx, schema)
 	}
 	conn := s.conn
 	lengths := varcharLengths(schema, sample, s.ingestVarcharLength)
@@ -196,13 +196,11 @@ func (s *statementImpl) prepareIngestTarget(ctx context.Context, schema *arrow.S
 	switch mode {
 	case adbc.OptionValueIngestModeCreate:
 		if exists {
-			// The ADBC spec reserves AlreadyExists for schema mismatches;
-			// "create" on an existing table is a plain error.
-			return adbc.Error{Code: adbc.StatusInternal, Msg: fmt.Sprintf("ingest: table %s already exists (use mode append, create_append or replace)", s.ingestTarget())}
+			return adbc.Error{Code: adbc.StatusAlreadyExists, Msg: fmt.Sprintf("ingest: table %s already exists (use mode append, create_append or replace)", s.ingestTarget())}
 		}
 	case adbc.OptionValueIngestModeCreateAppend:
 		if exists {
-			return nil
+			return s.checkAppendSchema(ctx, schema)
 		}
 	case adbc.OptionValueIngestModeReplace:
 		if exists {
@@ -214,9 +212,37 @@ func (s *statementImpl) prepareIngestTarget(ctx context.Context, schema *arrow.S
 	if _, err := conn.conn.ExecImmediate(ctx, ddl); err != nil {
 		var ca *drda.SQLCA
 		if errors.As(err, &ca) && ca.SQLCode == -601 {
-			return adbc.Error{Code: adbc.StatusInternal, Msg: "ingest: " + ca.Error()}
+			return adbc.Error{Code: adbc.StatusAlreadyExists, Msg: "ingest: " + ca.Error(), VendorCode: ca.SQLCode}
 		}
 		return fromDRDAError(err)
+	}
+	return nil
+}
+
+// checkAppendSchema enforces ADBC's append contract: data whose columns
+// the existing table does not have is a schema mismatch
+// (ALREADY_EXISTS), and a missing table is NOT_FOUND. Columns the data
+// leaves out get the table's defaults.
+func (s *statementImpl) checkAppendSchema(ctx context.Context, schema *arrow.Schema) error {
+	cols, _, err := s.conn.conn.Describe(ctx, "SELECT * FROM "+s.ingestTarget())
+	if err != nil {
+		var ca *drda.SQLCA
+		if errors.As(err, &ca) && ca.SQLCode == -204 {
+			e := adbc.Error{Code: adbc.StatusNotFound, Msg: "ingest: " + ca.Error(), VendorCode: ca.SQLCode}
+			copy(e.SqlState[:], "42S02")
+			return e
+		}
+		return fromDRDAError(err)
+	}
+	have := make(map[string]bool, len(cols))
+	for _, c := range cols {
+		have[c.Name] = true
+	}
+	for _, f := range schema.Fields() {
+		if !have[f.Name] {
+			return adbc.Error{Code: adbc.StatusAlreadyExists,
+				Msg: fmt.Sprintf("ingest: table %s has no column %q, so the data does not match its schema", s.ingestTarget(), f.Name)}
+		}
 	}
 	return nil
 }
@@ -264,11 +290,16 @@ func varcharLengths(schema *arrow.Schema, sample arrow.Record, fixed int) []int 
 		if sample != nil && i < int(sample.NumCols()) {
 			n = maxValueLength(sample.Column(i))
 		}
+		// Headroom for longer values in later batches. Up to Db2's
+		// VARCHAR limit the column stays a VARCHAR/VARBINARY; values that
+		// are already longer than it get a CLOB/BLOB (see db2TypeForArrow)
+		// instead of failing every row with SQL0302N.
+		longest := n
 		n *= 2
 		if n < minAutoVarcharLength {
 			n = minAutoVarcharLength
 		}
-		if n > maxVarcharLength {
+		if n > maxVarcharLength && longest <= maxVarcharLength {
 			n = maxVarcharLength
 		}
 		out[i] = n

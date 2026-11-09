@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-09
+
+The driver now passes the open [ADBC validation suite](https://github.com/adbc-drivers/validation)
+against a real Db2, and the suite runs in CI as a release gate. It found the bugs below.
+
+### Fixed
+
+- **LOB values in NOT NULL columns lost their first byte.** A `BLOB`/`CLOB` read from a
+  NOT NULL column (or expression, e.g. `CAST(... AS BLOB)`) came back without its first byte:
+  the driver stripped a null-indicator byte that DRDA only sends for nullable LOB columns.
+- **Empty LOBs** (`BX''`, `''` as `BLOB`/`CLOB`) failed the fetch ("cannot store drda.LobRef")
+  or came back as the text `{true}`; they now read back as empty values.
+- **`CHAR`/`VARCHAR`/`LONG VARCHAR FOR BIT DATA` columns are Arrow `binary`**, as their bytes
+  are not text. They were `utf8` columns holding invalid UTF-8.
+- **Time-zone-aware timestamps are bound and ingested as UTC.** They were stored as wall time in
+  the Arrow type's display zone, so the stored value depended on display metadata (and
+  `9999-12-31 23:59:59 UTC` overflowed in `Asia/Tokyo`).
+- **An Arrow time with a fractional second is refused** when binding to Db2 `TIME` (whole-second
+  precision) instead of being silently truncated.
+- Bulk ingest: values longer than a `VARCHAR` can hold (32,672 bytes) get a `CLOB`/`BLOB` column
+  instead of failing every row with SQL0302N; a negative decimal scale (`decimal(2,-2)`) becomes
+  `DECIMAL(4,0)` holding the same values (it produced invalid DDL); `create` on an existing table fails with `ALREADY_EXISTS` (was `INTERNAL`); appending
+  data with a column the table lacks fails with `ALREADY_EXISTS` before inserting (was a
+  `NOT_FOUND` from the INSERT); appending to a missing table is `NOT_FOUND`.
+- `GetObjects` lists `CHECK` constraints (it read only `SYSCAT.KEYCOLUSE`, which has none).
+- An unknown database option is refused with `NOT_IMPLEMENTED` instead of being ignored, so a
+  misspelled option fails (standard `adbc.connection.*`/`adbc.statement.*` keys are still
+  accepted on the database). Setting `adbc.connection.db_schema` to a schema that does not exist
+  fails with `NOT_FOUND` (Db2 accepts it silently).
+- `GetInfo` reports the linked arrow-go release (e.g. `v18.8.0`) as the driver's Arrow version,
+  not `arrow-go/v18`.
+
+### Added
+
+- `validation/`: the ADBC validation suite (pinned by commit; a test dependency only) with this
+  driver's Db2 quirks and per-case query overrides, each with its reason. A new CI job runs it
+  against a Db2 container, and the PyPI publish and GitHub Release now wait on it. It fails,
+  never skips, when the server is unreachable or nothing passes.
+
+### Changed
+
+- Dependencies: golang.org/x/{exp,mod,sync,sys,tools}, goccy/go-json 0.12.0 and
+  klauspost/cpuid 2.4.2 (arrow-go 18.8.0 and arrow-adbc 1.13.0 are already the latest; CI's
+  Go 1.27.3 is the latest release). Test extras: pytest 9.2, pandas 3.1.1, Hardcharger 2.10;
+  build backend setuptools 84.2.1. The runtime floors (`adbc-driver-manager`, `pyarrow`) and
+  Python 3.10 support are unchanged.
+
 ## [0.2.3] - 2026-10-27
 
 ### Added

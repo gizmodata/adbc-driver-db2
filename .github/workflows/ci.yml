@@ -10,6 +10,7 @@ on:
 
 # ┌─ go-test (unit, 3 OS) ─┐
 # ├─ go-integration (Db2) ─┼─> wheels ──> publish (PyPI) / github-release
+# ├─ validation (Db2) ─────┤
 # └─ python-test (Db2 + Hardcharger)
 #
 # Db2 only ships as a linux/amd64 container, so integration jobs run on
@@ -73,6 +74,55 @@ jobs:
           DB2_HOST: localhost
           DB2_PORT: '50000'
         run: go test -timeout 20m -count=1 ./...
+
+  validation:
+    # The adbc-drivers.org conformance suite (validation/), run against a real
+    # Db2 with this commit's c-shared library. It is a release gate: it fails,
+    # never skips, when the server or the library is missing.
+    name: ADBC conformance suite (adbc-drivers.org, Db2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: astral-sh/setup-uv@v10
+      - name: Start Db2
+        run: |
+          # Registry hiccups (icr.io especially) fail a bare docker run;
+          # pull with retries first.
+          for i in 1 2 3 4 5; do docker pull icr.io/db2_community/db2 && break; [ $i = 5 ] && exit 1; sleep $((i * 15)); done
+          docker run -d --name db2 --privileged=true -p 50000:50000 \
+            -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb \
+            icr.io/db2_community/db2
+      - name: Build c-shared driver library
+        run: |
+          go build -buildmode=c-shared -tags driverlib \
+            -o pkg/db2/libadbc_driver_db2.so ./pkg/db2
+      - name: Install the validation suite
+        run: |
+          uv venv --python 3.14 validation/.venv
+          uv pip install --python validation/.venv/bin/python -r validation/requirements.txt
+      - name: Wait for Db2
+        timeout-minutes: 15
+        run: |
+          for i in $(seq 1 180); do
+            if docker logs db2 2>&1 | grep -q "Setup has completed"; then exit 0; fi
+            sleep 5
+          done
+          docker logs db2 | tail -50; exit 1
+      - name: Run the validation suite
+        working-directory: validation
+        env:
+          ADBC_DB2_TEST_URI: db2://db2inst1:password@127.0.0.1:50000/testdb
+          ADBC_DB2_TEST_DRIVER_PATH: ${{ github.workspace }}/pkg/db2/libadbc_driver_db2.so
+        run: .venv/bin/pytest -ra --junitxml=validation-results.xml tests
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: validation-results
+          path: validation/validation-results.xml
 
   python-test:
     name: Python tests (Db2 + Hardcharger, py${{ matrix.python }})
@@ -214,7 +264,7 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: [wheels, go-integration, python-test]
+    needs: [wheels, go-integration, python-test, validation]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
@@ -237,7 +287,7 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [wheels, go-integration, python-test]
+    needs: [wheels, go-integration, python-test, validation]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

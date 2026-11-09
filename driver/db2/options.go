@@ -276,9 +276,11 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionNoAutoBind:
 			cfg.drda.NoAutoBind = isTrue(v)
 		default:
-			// Unknown options are ignored so generic tooling that sets
-			// e.g. adbc.connection.autocommit at the database level
-			// doesn't fail.
+			// Only standard connection/statement keys get this far (see
+			// isDatabaseOption); they are ignored at the database level.
+			if !isDatabaseOption(k) {
+				return nil, errStatus(adbc.StatusNotImplemented, "unknown database option %q", k)
+			}
 		}
 	}
 
@@ -340,4 +342,27 @@ func parseTimeout(v string) (time.Duration, error) {
 
 func errStatus(code adbc.Status, format string, args ...any) error {
 	return adbc.Error{Code: code, Msg: fmt.Sprintf(format, args...)}
+}
+
+// databaseOptions are the keys a Database accepts.
+var databaseOptions = map[string]bool{
+	OptionURI: true, OptionUsername: true, OptionPassword: true,
+	OptionHost: true, OptionPort: true, OptionDatabase: true,
+	OptionTLS: true, OptionTLSCACert: true, OptionTLSSkipVerify: true,
+	OptionSecurityMechanism: true, OptionCurrentSchema: true,
+	OptionQueryBlockSize: true, OptionConnectTimeout: true,
+	OptionApplicationName: true, OptionBatchSize: true, OptionBatchBytes: true,
+	OptionTrace: true, OptionTraceFile: true, OptionPackage: true,
+	OptionNoAutoBind: true,
+}
+
+// isDatabaseOption reports whether a Database accepts key. Besides its own
+// options, it tolerates the standard adbc.connection.* / adbc.statement.*
+// keys (ignored there), which generic tooling sometimes sets on the
+// database; anything else is refused with NOT_IMPLEMENTED, as ADBC requires,
+// so a misspelled option fails instead of being silently dropped.
+func isDatabaseOption(key string) bool {
+	return databaseOptions[key] ||
+		strings.HasPrefix(key, "adbc.connection.") ||
+		strings.HasPrefix(key, "adbc.statement.")
 }

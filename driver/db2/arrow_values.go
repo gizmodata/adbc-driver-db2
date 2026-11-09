@@ -37,18 +37,18 @@ func db2TypeForArrow(f arrow.Field, varcharLen int) (string, error) {
 	case *arrow.Float64Type:
 		return "DOUBLE", nil
 	case *arrow.Decimal128Type:
-		if dt.Precision > 31 {
-			return "", fmt.Errorf("decimal precision %d exceeds Db2's maximum of 31", dt.Precision)
-		}
-		return fmt.Sprintf("DECIMAL(%d,%d)", dt.Precision, dt.Scale), nil
+		return db2Decimal(dt.Precision, dt.Scale)
 	case *arrow.Decimal256Type:
-		if dt.Precision > 31 {
-			return "", fmt.Errorf("decimal precision %d exceeds Db2's maximum of 31", dt.Precision)
-		}
-		return fmt.Sprintf("DECIMAL(%d,%d)", dt.Precision, dt.Scale), nil
+		return db2Decimal(dt.Precision, dt.Scale)
 	case *arrow.StringType, *arrow.LargeStringType, *arrow.StringViewType:
+		if varcharLen > maxVarcharLength {
+			return fmt.Sprintf("CLOB(%d)", varcharLen), nil
+		}
 		return fmt.Sprintf("VARCHAR(%d)", varcharLen), nil
 	case *arrow.BinaryType, *arrow.LargeBinaryType, *arrow.BinaryViewType:
+		if varcharLen > maxVarcharLength {
+			return fmt.Sprintf("BLOB(%d)", varcharLen), nil
+		}
 		return fmt.Sprintf("VARBINARY(%d)", varcharLen), nil
 	case *arrow.FixedSizeBinaryType:
 		return fmt.Sprintf("BINARY(%d)", dt.ByteWidth), nil
@@ -147,12 +147,12 @@ func columnValues(col arrow.Array) ([]drda.Value, error) {
 	case *array.Decimal128:
 		scale := a.DataType().(*arrow.Decimal128Type).Scale
 		for i := 0; i < n; i++ {
-			set(i, drda.Decimal{Unscaled: a.Value(i).BigInt(), Scale: scale})
+			set(i, db2DecimalValue(a.Value(i).BigInt(), scale))
 		}
 	case *array.Decimal256:
 		scale := a.DataType().(*arrow.Decimal256Type).Scale
 		for i := 0; i < n; i++ {
-			set(i, drda.Decimal{Unscaled: a.Value(i).BigInt(), Scale: scale})
+			set(i, db2DecimalValue(a.Value(i).BigInt(), scale))
 		}
 	// String / binary values are zero-copy views into the record's
 	// buffers; the bound record may be released before the rows are
@@ -198,25 +198,34 @@ func columnValues(col arrow.Array) ([]drda.Value, error) {
 	case *array.Time32:
 		unit := a.DataType().(*arrow.Time32Type).Unit
 		for i := 0; i < n; i++ {
-			t := a.Value(i).ToTime(unit)
-			set(i, drda.Time{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second()})
+			if a.IsNull(i) {
+				continue
+			}
+			t, err := wholeSecondTime(a.Value(i).ToTime(unit))
+			if err != nil {
+				return nil, err
+			}
+			set(i, t)
 		}
 	case *array.Time64:
 		unit := a.DataType().(*arrow.Time64Type).Unit
 		for i := 0; i < n; i++ {
-			t := a.Value(i).ToTime(unit)
-			set(i, drda.Time{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second()})
+			if a.IsNull(i) {
+				continue
+			}
+			t, err := wholeSecondTime(a.Value(i).ToTime(unit))
+			if err != nil {
+				return nil, err
+			}
+			set(i, t)
 		}
 	case *array.Timestamp:
+		// A time-zone-aware Arrow timestamp is an instant (its values are
+		// UTC; the zone only says how to display it). Db2's TIMESTAMP has
+		// no zone, so store the instant as UTC, whatever the display zone.
 		dt := a.DataType().(*arrow.TimestampType)
-		loc := time.UTC
-		if dt.TimeZone != "" {
-			if l, err := dt.GetZone(); err == nil {
-				loc = l
-			}
-		}
 		for i := 0; i < n; i++ {
-			t := a.Value(i).ToTime(dt.Unit).In(loc)
+			t := a.Value(i).ToTime(dt.Unit).UTC()
 			set(i, drda.Timestamp{
 				Date:  drda.Date{Year: t.Year(), Month: int(t.Month()), Day: t.Day()},
 				Time:  drda.Time{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second()},
@@ -251,4 +260,39 @@ func recordRows(rec arrow.Record) ([][]drda.Value, error) {
 		rows[r] = row
 	}
 	return rows, nil
+}
+
+// wholeSecondTime converts a time of day to a Db2 TIME, which has
+// whole-second precision. A fractional second is refused rather than
+// silently dropped.
+func wholeSecondTime(t time.Time) (drda.Time, error) {
+	if t.Nanosecond() != 0 {
+		return drda.Time{}, fmt.Errorf("time %s has a fractional second, but Db2 TIME has whole-second precision (cast it, or bind a timestamp)",
+			t.Format("15:04:05.999999999"))
+	}
+	return drda.Time{Hour: t.Hour(), Minute: t.Minute(), Second: t.Second()}, nil
+}
+
+// db2Decimal renders an Arrow decimal's Db2 type. Db2 has no negative
+// scale, so decimal(p, -s) (multiples of 10^s) becomes DECIMAL(p+s, 0),
+// which holds every such value exactly (see db2DecimalValue).
+func db2Decimal(precision, scale int32) (string, error) {
+	if scale < 0 {
+		precision, scale = precision-scale, 0
+	}
+	if precision > 31 {
+		return "", fmt.Errorf("decimal precision %d exceeds Db2's maximum of 31", precision)
+	}
+	return fmt.Sprintf("DECIMAL(%d,%d)", precision, scale), nil
+}
+
+// db2DecimalValue converts an Arrow decimal value for Db2. A negative
+// scale is folded into the digits (unscaled 99 at scale -2 is 9900), as
+// Db2 decimals cannot carry one.
+func db2DecimalValue(unscaled *big.Int, scale int32) drda.Decimal {
+	if scale < 0 {
+		mult := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-scale)), nil)
+		return drda.Decimal{Unscaled: unscaled.Mul(unscaled, mult), Scale: 0}
+	}
+	return drda.Decimal{Unscaled: unscaled, Scale: scale}
 }

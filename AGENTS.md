@@ -40,6 +40,19 @@ debugging.
 - With `DB2_HOST=localhost` (plus optional `DB2_PORT/DB2_DATABASE/DB2_USER/DB2_PASSWORD`):
   DRDA integration tests, ADBC driver tests, and `TestValidation`, the
   upstream arrow-adbc conformance suite. Keep it passing.
+- `validation/`: the adbc-drivers.org validation suite (pytest, Python 3.13+,
+  pinned by commit in `validation/requirements.txt`; used only as a test
+  dependency) against the built c-shared library and a live Db2:
+  `ADBC_DB2_TEST_URI=db2://db2inst1:password@127.0.0.1:50000/testdb` (and
+  optionally `ADBC_DB2_TEST_DRIVER_PATH`), `cd validation && .venv/bin/pytest
+  tests`. It fails, never skips, without a reachable server, and CI's
+  `validation` job gates the release. Db2 differences are in
+  `validation/tests/db2.py` (quirks) and `validation/queries/` (per-case
+  overrides: Db2 folds unquoted names to upper case, so result columns are
+  `RES`), each with its reason; declare something unsupported only when Db2
+  lacks it, never to hide a driver bug. Where its expectations differ from
+  arrow-adbc's Go suite (create on an existing table: ALREADY_EXISTS, not
+  INTERNAL), follow it and the spec.
 - Python: build the c-shared lib, copy it into `python/adbc_driver_db2/`,
   `pip install -e ".[test,hardcharger]"`, `DB2_HOST=localhost pytest`.
   `test_db2_to_hardcharger.py` (the data-ingestion notebook flow this driver

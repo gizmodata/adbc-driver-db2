@@ -7,6 +7,7 @@ claims a pattern works, a test here proves it.
 from __future__ import annotations
 
 import datetime
+import re
 import decimal
 
 import pyarrow as pa
@@ -187,6 +188,8 @@ def test_metadata(db2_server):
         info = conn.adbc_get_info()
         assert info["vendor_name"] == "IBM Db2"
         assert info["driver_name"] == "ADBC Db2 Driver - Go"
+        # The linked arrow-go release, read from the library's build info.
+        assert re.fullmatch(r"v18\.\d+\.\d+", info["driver_arrow_version"])
         objects = conn.adbc_get_objects(depth="tables", db_schema_filter="SYSCAT", table_name_filter="TABLES").read_all()
         assert objects.num_rows == 1
         schema = conn.adbc_get_table_schema("TABLES", db_schema_filter="SYSCAT")

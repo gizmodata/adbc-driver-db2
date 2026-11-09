@@ -39,3 +39,4 @@ pkg/db2/libadbc_driver_db2*.{so,dylib,dll}
 
 # Test logs
 *.log
+validation/validation-results.xml

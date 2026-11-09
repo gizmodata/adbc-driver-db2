@@ -72,7 +72,7 @@ func TestADBCBulkIngest(t *testing.T) {
 	_, err = stmt.ExecuteUpdate(ctx)
 	var ae adbc.Error
 	require.ErrorAs(t, err, &ae)
-	require.Equal(t, adbc.StatusInternal, ae.Code)
+	require.Equal(t, adbc.StatusAlreadyExists, ae.Code)
 
 	// append
 	require.NoError(t, stmt.SetOption(adbc.OptionKeyIngestMode, adbc.OptionValueIngestModeAppend))

@@ -297,8 +297,10 @@ func (q *Query) resolveLOBs() {
 			idx++
 			f := q.Fields[i]
 			base := f.Type &^ 1
-			if base == TypeLobBytes || base == TypeLobCSBCS {
-				// Inline LOB EXTDTA starts with a status byte (0x00 = ok).
+			if (base == TypeLobBytes || base == TypeLobCSBCS) && f.Type&1 == 1 {
+				// The EXTDTA of a nullable LOB column starts with a
+				// null-indicator byte (0x00 = not null); a NOT NULL
+				// column's EXTDTA is the data alone.
 				if len(data) > 0 {
 					data = data[1:]
 				}
