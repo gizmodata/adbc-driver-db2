@@ -329,10 +329,27 @@ import adbc_driver_db2
 
 conn = dbapi.connect(
     driver=adbc_driver_db2._driver_path(),
-    entrypoint="Db2DriverInit",
+    entrypoint="AdbcDriverDb2Init",
     db_kwargs={"uri": "db2://host:50000/SAMPLE", "username": "u", "password": "p"},
 )
 ```
+
+`AdbcDriverDb2Init` is the entrypoint the driver manager derives from the file
+name `libadbc_driver_db2.*`, so `entrypoint` can be left out; the library also
+exports the generic `AdbcDriverInit`. The `Db2DriverInit` entrypoint that 0.2.4
+and earlier documented (and wrote into driver manifests) still works, but is
+deprecated and will be removed in 1.0.
+
+### The shared library without Python
+
+Each [GitHub Release](https://github.com/gizmodata/adbc-driver-db2/releases)
+attaches the c-shared library for C, C++, Go, Rust and driver-manifest consumers
+as `libadbc_driver_db2-<os>-<arch>.tar.gz` (`linux-amd64`, `linux-arm64`,
+`darwin-arm64`, `windows-amd64`), each with a `.sha256` and covered by `SHA256SUMS`.
+The archive holds `libadbc_driver_db2.so` / `.dylib` / `.dll` (plus `LICENSE` and
+`NOTICE`). Keep that file name: the driver manager derives the entrypoint from it.
+The library exports only `Adbc*` symbols (and the deprecated `Db2DriverInit`).
+The Linux library needs glibc 2.17 or later, the macOS one macOS 13 or later.
 
 ### Connection profiles and the driver manifest
 
@@ -423,7 +440,8 @@ through bulk ingest with the original Db2 types.
 ```
 go test ./...                                   # unit tests (no server needed)
 DB2_HOST=localhost go test ./...                # integration + ADBC conformance suite
-go build -buildmode=c-shared -tags driverlib -o pkg/db2/libadbc_driver_db2.dylib ./pkg/db2
+scripts/build_lib.sh                            # pkg/db2/libadbc_driver_db2.{so,dylib,dll}
+go run ./scripts/checkexports -allow Db2DriverInit pkg/db2/libadbc_driver_db2.dylib
 ADBC_DB2_LIBRARY=$PWD/pkg/db2/libadbc_driver_db2.dylib pip install -e ".[test]"
 DB2_HOST=localhost pytest
 

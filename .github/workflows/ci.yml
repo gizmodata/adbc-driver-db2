@@ -9,12 +9,18 @@ on:
   workflow_dispatch:
 
 # ┌─ go-test (unit, 3 OS) ─┐
-# ├─ go-integration (Db2) ─┼─> wheels ──> publish (PyPI) / github-release
+# ├─ go-integration (Db2) ─┼─> wheels ─> old-glibc ─> publish (PyPI) / github-release
 # ├─ validation (Db2) ─────┤
 # └─ python-test (Db2 + Hardcharger)
 #
 # Db2 only ships as a linux/amd64 container, so integration jobs run on
 # ubuntu; macOS/Windows run the hermetic unit tests and build wheels.
+#
+# Every job builds the c-shared library through scripts/build_lib.sh, which
+# limits its exports to Adbc* (plus the deprecated Db2DriverInit alias), and
+# then checks them with scripts/checkexports (ADBC shared-library
+# requirements). Linux release builds use zig cc against glibc 2.17, the
+# floor the wheels' manylinux2014 tag promises.
 
 env:
   GO_VERSION: '1.27.3'
@@ -99,8 +105,8 @@ jobs:
             icr.io/db2_community/db2
       - name: Build c-shared driver library
         run: |
-          go build -buildmode=c-shared -tags driverlib \
-            -o pkg/db2/libadbc_driver_db2.so ./pkg/db2
+          scripts/build_lib.sh pkg/db2/libadbc_driver_db2.so
+          go run ./scripts/checkexports -allow Db2DriverInit pkg/db2/libadbc_driver_db2.so
       - name: Install the validation suite
         run: |
           uv venv --python 3.14 validation/.venv
@@ -151,8 +157,8 @@ jobs:
             icr.io/db2_community/db2
       - name: Build c-shared driver library
         run: |
-          go build -buildmode=c-shared -tags driverlib \
-            -o pkg/db2/libadbc_driver_db2.so ./pkg/db2
+          scripts/build_lib.sh pkg/db2/libadbc_driver_db2.so
+          go run ./scripts/checkexports -allow Db2DriverInit pkg/db2/libadbc_driver_db2.so
           echo "ADBC_DB2_LIBRARY=$PWD/pkg/db2/libadbc_driver_db2.so" >> "$GITHUB_ENV"
       - name: Start Hardcharger
         # The Db2 -> Hardcharger tests (test-only dependency; the driver itself has
@@ -213,29 +219,80 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      # Linux: build with `zig cc` against glibc 2.17, so the wheel's
+      # manylinux2014 tag (set in setup.py) is true. Built with the runner's
+      # gcc, 0.2.4's library needed GLIBC_2.34.
+      - uses: mlugg/setup-zig@v2
+        if: ${{ matrix.goos == 'linux' }}
+        with:
+          version: 0.14.1
       - name: Build c-shared driver library
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
-          MACOSX_DEPLOYMENT_TARGET: '12.0'
+          # Go 1.27's oldest supported macOS is 13.0, so the library and the
+          # wheel say so. build_lib.sh also passes -mmacosx-version-min in
+          # CGO_CFLAGS/CGO_LDFLAGS (Go's build cache ignores this variable).
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
-          go build -buildmode=c-shared -tags driverlib \
-            -o "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}" ./pkg/db2
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            export CC="zig cc -target $([ "${{ matrix.goarch }}" = arm64 ] && echo aarch64 || echo x86_64)-linux-gnu.2.17"
+          fi
+          scripts/build_lib.sh "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}"
           LIB="$PWD/pkg/db2/libadbc_driver_db2.${{ matrix.ext }}"
           if [ "${{ runner.os }}" = "Windows" ]; then LIB=$(cygpath -m "$LIB"); fi
           echo "ADBC_DB2_LIBRARY=$LIB" >> "$GITHUB_ENV"
+      - name: Check the library's exports (ADBC shared-library requirements)
+        shell: bash
+        run: go run ./scripts/checkexports -allow Db2DriverInit "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}"
+      - name: Check the glibc ceiling (2.17, the manylinux2014 tag)
+        if: ${{ matrix.goos == 'linux' }}
+        run: |
+          MAX=$(objdump -T pkg/db2/libadbc_driver_db2.so | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "highest glibc symbol version: ${MAX:-none}"
+          if [ -z "$MAX" ]; then
+            echo "::error::found no GLIBC_ symbol versions in libadbc_driver_db2.so"
+            exit 1
+          fi
+          if [ "$(printf '%s\n2.17\n' "$MAX" | sort -V | tail -1)" != "2.17" ]; then
+            echo "::error::libadbc_driver_db2.so needs glibc $MAX, but the wheel is tagged manylinux2014 (2.17)"
+            exit 1
+          fi
+      - name: Check the macOS floor (13.0) and architecture
+        if: ${{ matrix.goos == 'darwin' }}
+        run: |
+          otool -l pkg/db2/libadbc_driver_db2.dylib | grep -A4 LC_BUILD_VERSION
+          MINOS=$(otool -l pkg/db2/libadbc_driver_db2.dylib | awk '/LC_BUILD_VERSION/ { f=1 } f && $1 == "minos" { print $2; exit }')
+          ARCHS=$(lipo -archs pkg/db2/libadbc_driver_db2.dylib)
+          echo "minos=$MINOS archs=$ARCHS"
+          if [ "$MINOS" != "13.0" ] || [ "$ARCHS" != "arm64" ]; then
+            echo "::error::expected minos 13.0 and arm64 only, got minos=$MINOS archs=$ARCHS"
+            exit 1
+          fi
       - name: Build wheel
         shell: bash
         env:
-          # Let the arm64 wheel install on macOS 12+ rather than only on
-          # the runner's own macOS release.
-          MACOSX_DEPLOYMENT_TARGET: '12.0'
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
           ls -la dist/
+          # The tag must name what the library is: one architecture, the
+          # macOS floor of the Go toolchain, the glibc it was built against.
+          case "${{ matrix.os }}-${{ matrix.arch }}" in
+            macos-arm64)    want=macosx_13_0_arm64 ;;
+            linux-x86_64)   want=manylinux2014_x86_64 ;;
+            linux-arm64)    want=manylinux2014_aarch64 ;;
+            windows-x86_64) want=win_amd64 ;;
+          esac
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          if [ "${#wheels[@]}" -ne 1 ] || [[ "${wheels[0]}" != *"-py3-none-${want}.whl" ]]; then
+            echo "::error::expected one wheel tagged py3-none-${want}, got: ${wheels[*]}"
+            exit 1
+          fi
       - name: Smoke-import wheel in a clean venv
         shell: bash
         run: |
@@ -245,27 +302,64 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then VPY="$VENV/Scripts/python.exe"; else VPY="$VENV/bin/python"; fi
           "$VPY" -m pip install --quiet dist/*.whl
           "$VPY" -c "import adbc_driver_db2, adbc_driver_db2.dbapi; print(adbc_driver_db2._driver_path())"
+          # The driver manager loads the bundled library through each
+          # entrypoint (default-derived, explicit, deprecated alias).
+          "$VPY" -I "$GITHUB_WORKSPACE/scripts/load_entrypoints.py"
           "$VPY" -m adbc_driver_db2 install-manifest --dir "$RUNNER_TEMP/manifest"
       - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*.whl
-      - name: Stage c-shared library + checksum
+      - name: Stage c-shared library archive + checksum
+        # The archive keeps the library's own name, libadbc_driver_db2.<ext>:
+        # the driver manager derives the entrypoint (AdbcDriverDb2Init) from
+        # the file name, so a platform suffix on the file would break that.
         shell: bash
         run: |
-          mkdir -p release-artifacts
-          base="libadbc_driver_db2-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
-          cp "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}" "release-artifacts/${base}"
-          if command -v sha256sum >/dev/null 2>&1; then (cd release-artifacts && sha256sum "${base}" > "${base}.sha256");
-          else (cd release-artifacts && shasum -a 256 "${base}" > "${base}.sha256"); fi
+          set -euo pipefail
+          mkdir -p release-artifacts staging
+          cp "pkg/db2/libadbc_driver_db2.${{ matrix.ext }}" LICENSE NOTICE staging/
+          archive="libadbc_driver_db2-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          tar -czf "release-artifacts/${archive}" -C staging "libadbc_driver_db2.${{ matrix.ext }}" LICENSE NOTICE
+          tar -tzf "release-artifacts/${archive}"
+          if command -v sha256sum >/dev/null 2>&1; then (cd release-artifacts && sha256sum "${archive}" > "${archive}.sha256");
+          else (cd release-artifacts && shasum -a 256 "${archive}" > "${archive}.sha256"); fi
       - uses: actions/upload-artifact@v7
         with:
           name: libadbc_driver_db2-release-${{ matrix.goos }}-${{ matrix.goarch }}
           path: release-artifacts/*
 
+  old-glibc:
+    # The Linux wheels must install and load on a glibc-2.28 distro (RHEL 8
+    # family): dlopen fails on a missing GLIBC_x.y symbol version.
+    name: Wheel on AlmaLinux 8 (${{ matrix.arch }})
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-latest }
+          - { arch: arm64,  runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    container: almalinux:8
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Python 3.12
+        run: dnf install -y -q python3.12 python3.12-pip
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheel-linux-${{ matrix.arch }}
+          path: dist
+      - name: Install the wheel and load the driver
+        run: |
+          ldd --version | head -1
+          python3.12 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -q dist/*.whl
+          /tmp/venv/bin/python -I scripts/load_entrypoints.py
+
   publish:
     name: Publish to PyPI
-    needs: [wheels, go-integration, python-test, validation]
+    needs: [wheels, old-glibc, go-integration, python-test, validation]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
@@ -288,7 +382,7 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [wheels, go-integration, python-test, validation]
+    needs: [wheels, old-glibc, go-integration, python-test, validation]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -311,7 +405,10 @@ jobs:
         run: |
           mkdir -p release-bundle
           find artifacts -type d -name 'libadbc_driver_db2-release-*' -exec cp -r {}/. release-bundle/ \;
-          (cd release-bundle && find . -type f -name 'libadbc_driver_db2-*' ! -name '*.sha256' -exec sha256sum {} \; > SHA256SUMS)
+          (cd release-bundle && sha256sum libadbc_driver_db2-*.tar.gz > SHA256SUMS)
+          cat release-bundle/SHA256SUMS
+          archives=(release-bundle/libadbc_driver_db2-*.tar.gz)
+          if [ "${#archives[@]}" -ne 4 ]; then echo "::error::expected 4 library archives, found ${#archives[@]}"; exit 1; fi
           ls -la release-bundle/
       - uses: softprops/action-gh-release@v3
         with:

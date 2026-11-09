@@ -88,8 +88,9 @@ def render_manifest() -> str:
     from . import _driver_path, __version__
 
     driver_path = pathlib.Path(_driver_path()).resolve()
-    # The non-default entrypoint is load-bearing: without it the driver
-    # manager looks for AdbcDriverInit and name-based loading fails.
+    # AdbcDriverDb2Init is the entrypoint the ADBC driver manager derives from
+    # the library's name (libadbc_driver_db2.*); naming it keeps the manifest
+    # explicit. Db2DriverInit is a deprecated alias, removed in 1.0.
     return f"""\
 manifest_version = 1
 name = 'ADBC Db2 Driver - Go'
@@ -102,7 +103,7 @@ url = 'https://github.com/gizmodata/adbc-driver-db2'
 version = '1.1.0'
 
 [Driver]
-entrypoint = 'Db2DriverInit'
+entrypoint = 'AdbcDriverDb2Init'
 
 [Driver.shared]
 {_platform_tuple()} = '{driver_path}'

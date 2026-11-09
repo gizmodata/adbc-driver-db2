@@ -53,7 +53,9 @@ debugging.
   lacks it, never to hide a driver bug. Where its expectations differ from
   arrow-adbc's Go suite (create on an existing table: ALREADY_EXISTS, not
   INTERNAL), follow it and the spec.
-- Python: build the c-shared lib, copy it into `python/adbc_driver_db2/`,
+- Python: build the c-shared lib with `scripts/build_lib.sh` (it limits the
+  exports to `Adbc*` plus the deprecated `Db2DriverInit`; check with
+  `go run ./scripts/checkexports -allow Db2DriverInit <lib>`), copy it into `python/adbc_driver_db2/`,
   `pip install -e ".[test,hardcharger]"`, `DB2_HOST=localhost pytest`.
   `test_db2_to_hardcharger.py` (the data-ingestion notebook flow this driver
   exists for) and the `[hardcharger]` cases of `test_adbc_scanner.py` need a

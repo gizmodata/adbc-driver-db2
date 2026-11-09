@@ -27,8 +27,10 @@ package main
 // #include <string.h>
 import "C"
 
-// Db2DriverInit is the canonical short-form C ABI entrypoint, parallel
-// to FlightSQLDriverInit / SnowflakeDriverInit / etc.
+// Db2DriverInit is a deprecated alias of AdbcDriverDb2Init, the entrypoint
+// the ADBC driver manager derives from the library's name. Releases up to
+// 0.2.4 documented it and wrote it into driver manifests, so it stays
+// exported (the one non-Adbc export, see exports_*) until 1.0.
 //
 //export Db2DriverInit
 func Db2DriverInit(version C.int, rawDriver *C.void, err *C.struct_AdbcError) C.AdbcStatusCode {

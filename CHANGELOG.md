@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-09
+
+The shared library and wheels now follow the
+[ADBC shared-library requirements](https://adbc-drivers.org/building-drivers/shared-library-requirements.html),
+and the wheels' platform tags describe the library inside them.
+
+### Fixed
+
+- **The 0.2.4 Linux and macOS wheels were tagged wrong.** The Linux wheels said
+  `manylinux2014` (glibc 2.17), but their library needed glibc 2.34, so pip installed them on
+  RHEL/Oracle Linux/AlmaLinux 8 and similar, where the driver then failed to load
+  (``version `GLIBC_2.32' not found``). The macOS wheel said `macosx_12_0_universal2`, but its
+  library is arm64-only and built with Go 1.27, which supports macOS 13 and later. The Linux
+  library is now built against glibc 2.17 (`zig cc`), the macOS wheel is tagged
+  `macosx_13_0_arm64` (its library's minimum is 13.0), and CI checks the glibc ceiling, the
+  macOS minimum and every wheel's tag, and installs and loads the Linux wheels on AlmaLinux 8.
+- **The library exports only `Adbc*` symbols**, plus the deprecated `Db2DriverInit`. It also
+  exported ~70-250 internal names (`Db2DatabaseNew` and the rest of the Go wrapper, cgo glue such
+  as `_cgo_*` and `crosscall2`). `scripts/checkexports` verifies the exports on every platform in CI.
+
+### Changed
+
+- **The GitHub Release attaches `libadbc_driver_db2-<os>-<arch>.tar.gz` archives** (with a
+  `.sha256` each, and `SHA256SUMS`) holding `libadbc_driver_db2.so`/`.dylib`/`.dll`, `LICENSE`
+  and `NOTICE`, instead of bare libraries named `libadbc_driver_db2-<os>-<arch>.<ext>`. The
+  ADBC driver manager derives the entrypoint from the file name, so the old names pointed it at
+  `AdbcDriverDb2LinuxAmd64Init` and the like.
+- The Python package, the driver manifest written by `install-manifest`, the README and the tests
+  use the entrypoint `AdbcDriverDb2Init` (the one the driver manager derives from the file name).
+
+### Deprecated
+
+- The `Db2DriverInit` entrypoint. It still works (existing manifests and code keep loading),
+  and will be removed in 1.0. Use `AdbcDriverDb2Init`, or leave the entrypoint out.
+
 ## [0.2.4] - 2026-11-09
 
 The driver now passes the open [ADBC validation suite](https://github.com/adbc-drivers/validation)

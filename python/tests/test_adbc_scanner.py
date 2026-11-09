@@ -106,7 +106,7 @@ def engine(request, db2_server, driver_path):
                 TYPE adbc,
                 SCOPE {lit(db2_server.uri)},
                 driver {lit(library)},
-                entrypoint 'Db2DriverInit',
+                entrypoint 'AdbcDriverDb2Init',
                 uri {lit(db2_server.uri)},
                 username {lit(db2_server.user)},
                 password {lit(db2_server.password)}
