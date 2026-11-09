@@ -87,7 +87,8 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv publishes no floating major tags; pin the release.
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Start Db2
         run: |
           # Registry hiccups (icr.io especially) fail a bare docker run;
