@@ -54,14 +54,21 @@ class BinaryWheel(bdist_wheel):
         _python, _abi, plat = bdist_wheel.get_tag(self)
         # PyPI rejects bare ``linux_x86_64`` / ``linux_aarch64`` tags
         # (only manylinux / musllinux / specific tags are accepted), so
-        # rewrite to manylinux2014 — glibc 2.17, broadly compatible. Our
-        # Go-cgo binary links only to libc/libpthread/libdl/librt with
-        # ancient symbols, so this is honest, not optimistic. Proper
-        # auditwheel-repair-in-a-container is a future improvement.
+        # rewrite to manylinux2014 (glibc 2.17). CI builds the library with
+        # ``zig cc -target <arch>-linux-gnu.2.17`` and checks its highest
+        # GLIBC_ symbol version, so the tag is true; a library built with a
+        # newer distro's gcc (0.2.4 needed GLIBC_2.34) is not.
         if plat == "linux_x86_64":
             plat = "manylinux2014_x86_64"
         elif plat == "linux_aarch64":
             plat = "manylinux2014_aarch64"
+        elif plat.startswith("macosx_") and plat.endswith("_universal2"):
+            # The build Python is often a universal2 binary, but the Go
+            # library inside is built for this machine's architecture only:
+            # a universal2 tag would install on an Intel Mac and fail to load.
+            import platform
+
+            plat = plat[: -len("universal2")] + platform.machine()
         return ("py3", "none", plat)
 
 
@@ -92,7 +99,7 @@ def _normalize_library_path(p: str) -> str:
     return p
 
 
-# Bundle the c-shared library produced by `make -C pkg/db2`.
+# Bundle the c-shared library produced by `scripts/build_lib.sh`.
 library = os.environ.get("ADBC_DB2_LIBRARY")
 target = package_dir / f"libadbc_driver_db2.{_library_suffix()}"
 
@@ -112,7 +119,7 @@ elif not target.is_file():
     raise ValueError(
         "ADBC_DB2_LIBRARY env var is required when building a wheel "
         "(it should point to the libadbc_driver_db2.{so,dylib,dll} "
-        "produced by `make -C pkg/db2`)."
+        "produced by `scripts/build_lib.sh`)."
     )
 
 

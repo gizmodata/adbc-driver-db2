@@ -137,7 +137,7 @@ def connect(
     username, password:
         Credentials, if not embedded in the URI.
     """
-    kwargs = {"driver": _driver_path(), "entrypoint": "Db2DriverInit", "uri": uri}
+    kwargs = {"driver": _driver_path(), "entrypoint": "AdbcDriverDb2Init", "uri": uri}
     if username is not None:
         kwargs["username"] = username
     if password is not None:

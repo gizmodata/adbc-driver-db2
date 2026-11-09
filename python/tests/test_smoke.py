@@ -53,12 +53,43 @@ def test_readme_alternative_manager_pattern(db2_server):
 
     with dbapi.connect(
         driver=adbc_driver_db2._driver_path(),
-        entrypoint="Db2DriverInit",
+        entrypoint="AdbcDriverDb2Init",
         db_kwargs={
             "uri": db2_server.uri,
             "username": db2_server.user,
             "password": db2_server.password,
         },
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT 42 AS answer FROM SYSIBM.SYSDUMMY1")
+        assert cur.fetch_arrow_table().to_pylist() == [{"ANSWER": 42}]
+
+
+@pytest.mark.parametrize(
+    argnames="entrypoint",
+    argvalues=[
+        # Derived by the driver manager from libadbc_driver_db2.* (ADBC
+        # shared-library requirements), so no entrypoint argument at all.
+        None,
+        "AdbcDriverInit",
+        # Deprecated alias that 0.2.4 and earlier documented and wrote into
+        # driver manifests; still exported until 1.0.
+        "Db2DriverInit",
+    ],
+)
+def test_library_entrypoints(db2_server, entrypoint):
+    from adbc_driver_manager import dbapi
+
+    import adbc_driver_db2
+
+    kwargs = {} if entrypoint is None else {"entrypoint": entrypoint}
+    with dbapi.connect(
+        driver=adbc_driver_db2._driver_path(),
+        db_kwargs={
+            "uri": db2_server.uri,
+            "username": db2_server.user,
+            "password": db2_server.password,
+        },
+        **kwargs,
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT 42 AS answer FROM SYSIBM.SYSDUMMY1")
         assert cur.fetch_arrow_table().to_pylist() == [{"ANSWER": 42}]
