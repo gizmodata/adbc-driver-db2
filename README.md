@@ -7,6 +7,7 @@
 [![Supported Python Versions](https://img.shields.io/pypi/pyversions/adbc-driver-db2)](https://pypi.org/project/adbc-driver-db2/)
 [![PyPI version](https://badge.fury.io/py/adbc-driver-db2.svg)](https://badge.fury.io/py/adbc-driver-db2)
 [![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-db2.svg)](https://pypi.org/project/adbc-driver-db2/)
+[![ADBC conformance](https://img.shields.io/badge/ADBC-conformance%20suites%20passing-2ea44f.svg)](https://github.com/gizmodata/adbc-driver-db2/tree/main/validation)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-db2)](LICENSE)
 [![Hardcharger](https://img.shields.io/badge/works%20with-Hardcharger%E2%84%A2-f15a24.svg)](https://gizmodata.com/hardcharger)
 
