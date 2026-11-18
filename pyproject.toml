@@ -4,7 +4,7 @@ description = "A pure-Go Apache Arrow ADBC driver for IBM Db2 (DRDA wire protoco
 authors = [{ name = "GizmoData", email = "support@gizmodata.com" }]
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
-readme = "README.md"
+readme = "python/README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]
 keywords = [
