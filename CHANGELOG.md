@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **PyPI page**: the package's description on PyPI is now its own Python-only page, `python/README.md` (install, requirements, connect and query, streaming, loading the driver by name), linking to the repository README for other languages, the one-line installer and the full reference; the repository README keeps everything. `python/tests/test_pypi_readme.py` runs every Python example on that page against the live database.
+- **README**: installing without Python is one line, `curl https://install.adbc.gizmodata.com/db2 | sh` (Linux, macOS) or `irm https://install.adbc.gizmodata.com/db2.ps1 | iex` (Windows): it installs the release's shared library, checked against its `SHA256SUMS`, and a `db2` driver manifest, so any ADBC driver manager loads it as `driver = "db2"` ([gizmodata/adbc-install](https://github.com/gizmodata/adbc-install)).
 - **CI**: a change that touches only documentation (`*.md`, `docs/`, `LICENSE`, `NOTICE`) skips the build and test jobs, and one job, `CI result`, reports on every run and is the only required check. The glibc-2.28 install check retries `dnf install` with fresh metadata, so a mirror serving a broken `repomd.xml` can't fail a build.
 
 ## [0.2.6] - 2026-11-09

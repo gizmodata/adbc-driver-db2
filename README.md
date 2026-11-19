@@ -27,6 +27,9 @@ binding (Python, Go, R, C/C++, C#, Rust, JavaScript) and returns
 pip install adbc-driver-db2
 ```
 
+Without Python: `curl https://install.adbc.gizmodata.com/db2 | sh` installs the shared library
+and its driver manifest for every ADBC driver manager ([more](#the-shared-library-without-python)).
+
 ```python
 import adbc_driver_db2.dbapi as db2
 
@@ -343,6 +346,24 @@ deprecated and will be removed in 1.0.
 
 ### The shared library without Python
 
+**Any language, through an ADBC driver manager (`driver = "db2"`):** one line installs the
+shared library and its driver manifest, so the driver manager loads the driver by name.
+
+```bash
+curl https://install.adbc.gizmodata.com/db2 | sh                 # Linux, macOS
+```
+
+```powershell
+irm https://install.adbc.gizmodata.com/db2.ps1 | iex             # Windows
+```
+
+The installer checks the download against the release's `SHA256SUMS`. To pin a version
+(`curl https://install.adbc.gizmodata.com/db2 | ADBC_VERSION=<version> sh`), install
+system-wide or into another directory, or uninstall, see
+[gizmodata/adbc-install](https://github.com/gizmodata/adbc-install). If another vendor's
+`db2` driver manifest is installed, the installer backs it up, replaces it and prints the
+command that restores it; `ADBC_NAME=<other name>` installs side by side instead.
+
 Each [GitHub Release](https://github.com/gizmodata/adbc-driver-db2/releases)
 attaches the c-shared library for C, C++, Go, Rust and driver-manifest consumers
 as `libadbc_driver_db2-<os>-<arch>.tar.gz` (`linux-amd64`, `linux-arm64`,
@@ -358,7 +379,8 @@ The Linux library needs glibc 2.17 or later, the macOS one macOS 13 or later.
 python -m adbc_driver_db2 install-manifest
 ```
 
-writes a `db2.toml` ADBC driver manifest so the driver resolves by name
+(or the [one-line installer](#the-shared-library-without-python)) writes a `db2.toml` ADBC
+driver manifest so the driver resolves by name
 from any ADBC consumer — `adbc_driver_manager.dbapi.connect(uri="db2://...")`,
 Hardcharger's and DuckDB's `adbc_scanner` secrets (`driver 'db2'`), DBeaver's ADBC
 connection type — and from connection profiles:
