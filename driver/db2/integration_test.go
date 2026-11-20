@@ -293,3 +293,33 @@ func TestCurrentSchemaOptionOnConnect(t *testing.T) {
 		})
 	}
 }
+
+// A schema given at connect must exist (the check adbc.connection.db_schema
+// makes): the connect fails with NOT_FOUND naming it, instead of leaving a
+// misspelled special register in place.
+func TestCurrentSchemaOptionMustExist(t *testing.T) {
+	uri := testURI(t)
+	for name, opts := range map[string]map[string]string{
+		"option":        {OptionURI: uri, OptionCurrentSchema: "NO_SUCH_SCHEMA_XYZ"},
+		"URI parameter": {OptionURI: uri + "?schema=NO_SUCH_SCHEMA_XYZ"},
+		// Quoted as given: a lower-case name is not folded to SYSCAT.
+		"case kept": {OptionURI: uri, OptionCurrentSchema: "syscat"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, err := NewDriver(memory.DefaultAllocator).NewDatabase(opts)
+			require.NoError(t, err)
+			cnxn, err := db.Open(context.Background())
+			if cnxn != nil {
+				cnxn.Close()
+			}
+			var ae adbc.Error
+			require.ErrorAs(t, err, &ae)
+			require.Equal(t, adbc.StatusNotFound, ae.Code)
+			want := opts[OptionCurrentSchema]
+			if want == "" {
+				want = "NO_SUCH_SCHEMA_XYZ"
+			}
+			require.Equal(t, fmt.Sprintf("[db2] schema %q does not exist", want), ae.Msg)
+		})
+	}
+}

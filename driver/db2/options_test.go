@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -149,10 +150,10 @@ func TestDeprecatedOptionSetOptionAndSetOptions(t *testing.T) {
 	require.False(t, present, "nothing is stored under the old name")
 }
 
-func TestNewNameTakesPrecedence(t *testing.T) {
+func TestNewNameTakesPrecedenceWithinOneCall(t *testing.T) {
 	captureWarnings(t)
 
-	// Both in one map, whatever the map's iteration order.
+	// Both in one NewDatabase map, whatever the map's iteration order.
 	for i := 0; i < 50; i++ {
 		db := newTestDatabase(t, map[string]string{
 			"adbc.db2.batch_size": "1",
@@ -163,13 +164,37 @@ func TestNewNameTakesPrecedence(t *testing.T) {
 		require.Equal(t, "2", got)
 	}
 
-	// New name first, old name later: the old key does not override.
-	db := newTestDatabase(t, nil)
-	require.NoError(t, db.SetOption(OptionBatchSize, "2"))
-	require.NoError(t, db.SetOption("adbc.db2.batch_size", "1"))
-	got, err := db.GetOption("adbc.db2.batch_size")
+	// Both in one SetOptions call.
+	for i := 0; i < 50; i++ {
+		db := newTestDatabase(t, nil)
+		require.NoError(t, db.SetOptions(map[string]string{OptionBatchSize: "2", "adbc.db2.batch_size": "1"}))
+		got, err := db.GetOption(OptionBatchSize)
+		require.NoError(t, err)
+		require.Equal(t, "2", got)
+	}
+}
+
+// Across separate calls the last write wins, whichever name it uses: an
+// old-name SetOption after a new-name one is applied, not silently dropped.
+func TestLastWriteWinsAcrossCalls(t *testing.T) {
+	captureWarnings(t)
+	uri := "db2://u@h/SAMPLE"
+
+	db := newTestDatabase(t, map[string]string{OptionURI: uri})
+	require.NoError(t, db.SetOption(OptionTLS, "false"))
+	require.NoError(t, db.SetOption("adbc.db2.tls", "true"))
+	got, err := db.GetOption("adbc.db2.tls")
 	require.NoError(t, err)
-	require.Equal(t, "2", got)
+	require.Equal(t, "true", got)
+	cfg, err := parseOptions(db.opts)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.drda.TLS, "TLS is on: the later write under the old name counts")
+
+	db = newTestDatabase(t, map[string]string{OptionURI: "db2s://u@h/SAMPLE", OptionTLSSkipVerify: "true"})
+	require.NoError(t, db.SetOption("adbc.db2.tls.skip_verify", "false"))
+	cfg, err = parseOptions(db.opts)
+	require.NoError(t, err)
+	require.False(t, cfg.drda.TLS.InsecureSkipVerify)
 
 	// Old name first, new name later: the new one replaces it.
 	db = newTestDatabase(t, nil)
@@ -179,22 +204,175 @@ func TestNewNameTakesPrecedence(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "2", got)
 
-	// Both in one SetOptions call.
-	db = newTestDatabase(t, nil)
-	require.NoError(t, db.SetOptions(map[string]string{OptionBatchSize: "2", "adbc.db2.batch_size": "1"}))
-	got, err = db.GetOption(OptionBatchSize)
-	require.NoError(t, err)
-	require.Equal(t, "2", got)
-
-	// Statement options too.
+	// Statements: applied, and validated, under either name.
 	st := &statementImpl{}
 	require.NoError(t, st.SetOption(OptionIngestBatchRows, "20"))
 	require.NoError(t, st.SetOption("adbc.db2.ingest.batch_rows", "10"))
-	require.Equal(t, 20, st.ingestBatchRows)
-	st = &statementImpl{}
-	require.NoError(t, st.SetOption("adbc.db2.ingest.batch_rows", "10"))
-	require.NoError(t, st.SetOption(OptionIngestBatchRows, "20"))
-	require.Equal(t, 20, st.ingestBatchRows)
+	require.Equal(t, 10, st.ingestBatchRows)
+	require.NoError(t, st.SetOption(OptionIngestBatchRows, "30"))
+	require.Equal(t, 30, st.ingestBatchRows)
+
+	err = st.SetOption("adbc.db2.ingest.batch_rows", "-1")
+	var ae adbc.Error
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, adbc.StatusInvalidArgument, ae.Code)
+	require.Equal(t, `[db2] invalid value "-1" for adbc.db2.ingest.batch_rows`, ae.Msg)
+	require.Equal(t, 30, st.ingestBatchRows, "a refused value changes nothing")
+}
+
+// Errors for a deprecated key name the key the caller wrote.
+func TestErrorsNameTheCallersKey(t *testing.T) {
+	captureWarnings(t)
+	var ae adbc.Error
+
+	db := newTestDatabase(t, nil)
+	_, err := db.GetOption("adbc.db2.tls")
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, adbc.StatusNotFound, ae.Code)
+	require.Equal(t, `[db2] unknown database option "adbc.db2.tls"`, ae.Msg)
+
+	c := &connectionImpl{cfg: &connConfig{}}
+	require.ErrorAs(t, c.SetOption("adbc.db2.batch_size", "1"), &ae)
+	require.Equal(t, adbc.StatusNotImplemented, ae.Code)
+	require.Equal(t, `[db2] unknown connection option "adbc.db2.batch_size"`, ae.Msg)
+	require.ErrorAs(t, c.SetOption(OptionBatchSize, "1"), &ae)
+	require.Equal(t, `[db2] unknown connection option "db2.query.batch_rows"`, ae.Msg)
+
+	st := &statementImpl{}
+	require.ErrorAs(t, st.SetOption("adbc.db2.ingest.varchar_length", "x"), &ae)
+	require.Equal(t, `[db2] invalid value "x" for adbc.db2.ingest.varchar_length`, ae.Msg)
+	_, err = st.GetOption("adbc.db2.batch_size")
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, `[db2] unknown statement option "adbc.db2.batch_size"`, ae.Msg)
+}
+
+// URI parameters: one setting given under two names, two spellings or
+// twice with different values is refused (it used to be decided by map
+// order); the same value twice is fine, and the outcome never varies.
+func TestURIParameterConflicts(t *testing.T) {
+	for _, tc := range []struct{ query, a, b string }{
+		{"batch_size=1&batch_rows=2", "batch_rows", "batch_size"},
+		{"query_block_size=1111&block_size=2222", "block_size", "query_block_size"},
+		{"connect_timeout=1&connect_timeout_seconds=2", "connect_timeout", "connect_timeout_seconds"},
+		{"tls=true&ssl=false", "ssl", "tls"},
+		{"secmec=9&security_mechanism=3", "secmec", "security_mechanism"},
+		{"TLS=true&tls=false", "TLS", "tls"},
+		{"tls_ca_cert=/a.pem&ca_cert=/b.pem", "ca_cert", "tls_ca_cert"},
+		{"user=a&uid=b", "uid", "user"},
+		{"password=S3cret-one&pwd=S3cret-two", "password", "pwd"},
+	} {
+		for i := 0; i < 30; i++ {
+			_, err := parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE?" + tc.query})
+			var ae adbc.Error
+			require.ErrorAs(t, err, &ae, tc.query)
+			require.Equal(t, adbc.StatusInvalidArgument, ae.Code)
+			require.Equal(t, fmt.Sprintf("[db2] URI parameters %q and %q set the same thing with different values; give one", tc.a, tc.b), ae.Msg)
+			require.NotContains(t, ae.Msg, "S3cret")
+		}
+	}
+
+	_, err := parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE?tls=true&tls=false"})
+	var ae adbc.Error
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, `[db2] URI parameter "tls" is given more than once with different values`, ae.Msg)
+
+	// The same value under two names or twice is fine.
+	for _, q := range []string{"batch_size=7&batch_rows=7", "tls=true&ssl=true", "secmec=3&secmec=3", "TLS=false&tls=false"} {
+		cfg, err := parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE?" + q})
+		require.NoError(t, err, q)
+		require.Equal(t, cfg, mustParse(t, "db2://u@h/SAMPLE?"+q), q)
+	}
+}
+
+func mustParse(t *testing.T, uri string) *connConfig {
+	t.Helper()
+	cfg, err := parseOptions(map[string]string{OptionURI: uri})
+	require.NoError(t, err)
+	return cfg
+}
+
+// An explicit trace=false wins over a trace file, whatever the order.
+func TestTraceFalseWinsOverTraceFile(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		cfg, err := parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE", OptionTrace: "false", OptionTraceFile: "/tmp/x"})
+		require.NoError(t, err)
+		require.False(t, cfg.trace)
+		require.Equal(t, "/tmp/x", cfg.traceFile)
+
+		cfg, err = parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE?trace=false&trace_file=/tmp/x"})
+		require.NoError(t, err)
+		require.False(t, cfg.trace)
+	}
+	// A trace file alone turns tracing on; trace=hex keeps hex.
+	cfg, err := parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE", OptionTraceFile: "/tmp/x"})
+	require.NoError(t, err)
+	require.True(t, cfg.trace)
+	cfg, err = parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE?trace_file=/tmp/x"})
+	require.NoError(t, err)
+	require.True(t, cfg.trace)
+	cfg, err = parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE", OptionTrace: "hex", OptionTraceFile: "/tmp/x"})
+	require.NoError(t, err)
+	require.True(t, cfg.trace)
+	require.True(t, cfg.traceHex)
+}
+
+// Passwords never reach an error message or GetOption("uri"), however the
+// URI is written: raw special characters make it unparseable (or land in
+// the host or port), percent-encoded ones work.
+func TestURIPasswordNeverEchoed(t *testing.T) {
+	for _, pw := range []string{"Zqw%ss%Xk7", "Zqw@ss@Xk7", "Zqw/ss/Xk7", "Zqw:ss:Xk7", "Zqw%40:/x@y%zzXk7"} {
+		raw := "db2://admin:" + pw + "@db2.example.invalid:50000/SAMPLE"
+		_, err := parseOptions(map[string]string{OptionURI: raw})
+		if err != nil {
+			require.NotContains(t, err.Error(), pw, raw)
+			for _, piece := range strings.FieldsFunc(pw, func(r rune) bool { return strings.ContainsRune("%@:/", r) }) {
+				if len(piece) >= 3 {
+					require.NotContains(t, err.Error(), piece, "error %q leaks part of the password", err.Error())
+				}
+			}
+		}
+
+		db := newTestDatabase(t, map[string]string{OptionURI: raw})
+		got, err := db.GetOption(OptionURI)
+		if err == nil {
+			require.NotContains(t, got, pw)
+		} else {
+			require.NotContains(t, err.Error(), pw)
+		}
+
+		// Percent-encoded, the password round-trips and GetOption redacts it.
+		enc := "db2://admin:" + url.QueryEscape(pw) + "@db2.example.invalid:50000/SAMPLE?pwd=" + url.QueryEscape(pw)
+		cfg, err := parseOptions(map[string]string{OptionURI: enc})
+		require.NoError(t, err, enc)
+		require.Equal(t, pw, cfg.drda.Password)
+		db = newTestDatabase(t, map[string]string{OptionURI: enc})
+		got, err = db.GetOption(OptionURI)
+		require.NoError(t, err)
+		require.Equal(t, "db2://admin:xxxxx@db2.example.invalid:50000/SAMPLE?pwd=xxxxx", got)
+	}
+
+	// The exact cases from the review.
+	_, err := parseOptions(map[string]string{OptionURI: "db2://admin:Pa%ss%word@127.0.0.1:1/DB"})
+	var ae adbc.Error
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, adbc.StatusInvalidArgument, ae.Code)
+	require.True(t, strings.HasPrefix(ae.Msg, "[db2] could not parse the URI: "), ae.Msg)
+	require.NotContains(t, ae.Msg, "Pa%ss")
+	require.NotContains(t, ae.Msg, "%ss")
+
+	db := newTestDatabase(t, map[string]string{OptionURI: "db2://admin:S3cret@127.0.0.1:1/DB", OptionPassword: "Other1"})
+	got, err := db.GetOption(OptionURI)
+	require.NoError(t, err)
+	require.Equal(t, "db2://admin:xxxxx@127.0.0.1:1/DB", got)
+	_, err = db.GetOption(OptionPassword)
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, adbc.StatusNotFound, ae.Code)
+
+	// A URI without a password comes back as given.
+	db = newTestDatabase(t, map[string]string{OptionURI: "db2://admin@h:50000/DB?tls=true"})
+	got, err = db.GetOption(OptionURI)
+	require.NoError(t, err)
+	require.Equal(t, "db2://admin@h:50000/DB?tls=true", got)
 }
 
 func TestDeprecatedStatementOptions(t *testing.T) {
@@ -223,7 +401,7 @@ func TestDeprecatedStatementOptions(t *testing.T) {
 	var ae adbc.Error
 	require.ErrorAs(t, err, &ae)
 	require.Equal(t, adbc.StatusInvalidArgument, ae.Code)
-	require.Equal(t, `[db2] invalid value "-1" for db2.ingest.batch_rows`, ae.Msg)
+	require.Equal(t, `[db2] invalid value "-1" for adbc.db2.ingest.batch_rows`, ae.Msg)
 }
 
 func TestDeprecatedConnectionGetOption(t *testing.T) {

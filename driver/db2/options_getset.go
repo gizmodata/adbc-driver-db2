@@ -22,17 +22,23 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	return nil
 }
 
-func (d *databaseImpl) GetOption(key string) (string, error) {
-	key, _ = canonicalOption(key)
+func (d *databaseImpl) GetOption(name string) (string, error) {
+	// name is what the caller wrote; errors name it.
+	key, _ := canonicalOption(name)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if key == OptionPassword {
-		return "", errStatus(adbc.StatusNotFound, "option %q is write-only", key)
+		return "", errStatus(adbc.StatusNotFound, "option %q is write-only", name)
 	}
-	if v, ok := d.opts[key]; ok {
-		return v, nil
+	v, ok := d.opts[key]
+	if !ok {
+		return "", errStatus(adbc.StatusNotFound, "unknown database option %q", name)
 	}
-	return "", errStatus(adbc.StatusNotFound, "unknown database option %q", key)
+	if key == OptionURI {
+		// The URI can carry a password: hand it back with that redacted.
+		return redactedURI(v)
+	}
+	return v, nil
 }
 
 func (d *databaseImpl) GetOptionBytes(key string) ([]byte, error) {
@@ -103,8 +109,8 @@ func (c *connectionImpl) SetOptionDouble(key string, value float64) error {
 
 // ---- statement ----
 
-func (s *statementImpl) GetOption(key string) (string, error) {
-	key, _ = canonicalOption(key)
+func (s *statementImpl) GetOption(name string) (string, error) {
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyIngestTargetTable:
 		return s.targetTable, nil
@@ -125,22 +131,22 @@ func (s *statementImpl) GetOption(key string) (string, error) {
 	case OptionIngestBatchRows:
 		return strconv.Itoa(s.ingestBatchRows), nil
 	}
-	return "", errStatus(adbc.StatusNotFound, "unknown statement option %q", key)
+	return "", errStatus(adbc.StatusNotFound, "unknown statement option %q", name)
 }
 
 func (s *statementImpl) GetOptionBytes(key string) ([]byte, error) {
 	return nil, errStatus(adbc.StatusNotFound, "unknown statement option %q", key)
 }
 
-func (s *statementImpl) GetOptionInt(key string) (int64, error) {
-	key, _ = canonicalOption(key)
+func (s *statementImpl) GetOptionInt(name string) (int64, error) {
+	key, _ := canonicalOption(name)
 	switch key {
 	case OptionIngestVarcharLength:
 		return int64(s.ingestVarcharLength), nil
 	case OptionIngestBatchRows:
 		return int64(s.ingestBatchRows), nil
 	}
-	return 0, errStatus(adbc.StatusNotFound, "unknown statement option %q", key)
+	return 0, errStatus(adbc.StatusNotFound, "unknown statement option %q", name)
 }
 
 func (s *statementImpl) GetOptionDouble(key string) (float64, error) {

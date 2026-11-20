@@ -5,10 +5,12 @@ package db2
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -109,10 +111,17 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 	var tlsEnabled, skipVerify bool
 	var caCert string
 
+	// traceSet records an explicit trace setting (URI trace= or db2.trace):
+	// it decides, and a trace file only turns tracing on when nothing did.
+	var traceSet bool
+
 	if raw := opts[OptionURI]; raw != "" {
+		// Never echo the URI or a piece of it in an error: it can carry a
+		// password, and a password with an unencoded "/", "@" or "%" lands
+		// in the host, the port or a bad escape.
 		u, err := url.Parse(raw)
 		if err != nil {
-			return nil, errStatus(adbc.StatusInvalidArgument, "invalid URI %q: %v", raw, err)
+			return nil, errStatus(adbc.StatusInvalidArgument, "could not parse the URI: %s", uriProblem(err))
 		}
 		switch u.Scheme {
 		case "db2", "drda", "ibm-db2", "db2s":
@@ -131,7 +140,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		if port != "" {
 			p, err := strconv.Atoi(port)
 			if err != nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "invalid port %q", port)
+				return nil, errStatus(adbc.StatusInvalidArgument,
+					"invalid port in the URI (percent-encode any \"/\", \"@\", \":\" or \"%%\" in the user name or password)")
 			}
 			cfg.drda.Port = p
 		}
@@ -142,40 +152,40 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			}
 		}
 		cfg.drda.Database = strings.Trim(u.Path, "/")
-		q := u.Query()
-		for key, vals := range q {
-			if len(vals) == 0 {
-				continue
-			}
-			v := vals[0]
-			switch strings.ToLower(key) {
-			case "tls", "ssl", "security":
+		params, err := uriParameters(u.RawQuery)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range params {
+			v := p.value
+			switch p.setting {
+			case "tls":
 				tlsEnabled = isTrue(v) || strings.EqualFold(v, "ssl")
-			case "tls_ca_cert", "sslcertificate", "ca_cert":
+			case "tls_ca_cert":
 				caCert = v
 			case "tls_skip_verify":
 				skipVerify = isTrue(v)
-			case "secmec", "security_mechanism", "securitymechanism":
+			case "security_mechanism":
 				n, err := strconv.Atoi(v)
 				if err != nil {
 					return nil, errStatus(adbc.StatusInvalidArgument, "invalid security mechanism %q", v)
 				}
 				cfg.drda.SecurityMechanism = uint16(n)
-			case "schema", "current_schema", "currentschema":
+			case "current_schema":
 				cfg.drda.CurrentSchema = v
-			case "query_block_size", "block_size", "queryblocksize":
+			case "block_size":
 				n, err := strconv.Atoi(v)
 				if err != nil {
-					return nil, errStatus(adbc.StatusInvalidArgument, "invalid query_block_size %q", v)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", p.name, v)
 				}
 				cfg.drda.QueryBlockSize = uint32(n)
-			case "connect_timeout", "connect_timeout_seconds", "logintimeout":
+			case "connect_timeout":
 				d, err := parseTimeout(v)
 				if err != nil {
 					return nil, err
 				}
 				cfg.drda.ConnectTimeout = d
-			case "application_name", "applicationname", "clientapplicationinformation":
+			case "application_name":
 				cfg.drda.ApplicationName = v
 			case "package":
 				coll, pkg, ok := strings.Cut(v, ".")
@@ -186,27 +196,25 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			case "trace":
 				cfg.trace = isTrue(v) || strings.EqualFold(v, "hex")
 				cfg.traceHex = strings.EqualFold(v, "hex")
+				traceSet = true
 			case "trace_file":
 				cfg.traceFile = v
-				cfg.trace = true
-			case "batch_size", "batch_rows":
+			case "batch_rows":
 				n, err := strconv.Atoi(v)
 				if err != nil || n <= 0 {
-					return nil, errStatus(adbc.StatusInvalidArgument, "invalid batch_rows %q", v)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", p.name, v)
 				}
 				cfg.batchSize = n
 			case "batch_bytes":
 				n, err := strconv.ParseInt(v, 10, 64)
 				if err != nil || n < 0 {
-					return nil, errStatus(adbc.StatusInvalidArgument, "invalid batch_bytes %q", v)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", p.name, v)
 				}
 				cfg.batchBytes = n
-			case "user", "uid":
+			case "user":
 				cfg.drda.User = v
-			case "password", "pwd":
+			case "password":
 				cfg.drda.Password = v
-			default:
-				return nil, errStatus(adbc.StatusInvalidArgument, "unknown URI parameter %q", key)
 			}
 		}
 	}
@@ -271,9 +279,9 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionTrace:
 			cfg.trace = isTrue(v) || strings.EqualFold(v, "hex")
 			cfg.traceHex = strings.EqualFold(v, "hex")
+			traceSet = true
 		case OptionTraceFile:
 			cfg.traceFile = v
-			cfg.trace = true
 		case OptionPackage:
 			coll, pkg, ok := strings.Cut(v, ".")
 			if !ok || coll == "" || pkg == "" {
@@ -289,6 +297,12 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 				return nil, errStatus(adbc.StatusNotImplemented, "unknown database option %q", k)
 			}
 		}
+	}
+
+	// A trace file turns tracing on unless trace was set explicitly (an
+	// explicit db2.trace=false wins, whatever the order of the options).
+	if !traceSet && cfg.traceFile != "" {
+		cfg.trace = true
 	}
 
 	if cfg.drda.Host == "" {
@@ -375,4 +389,125 @@ func isDatabaseOption(key string) bool {
 	return databaseOptions[key] ||
 		strings.HasPrefix(key, "adbc.connection.") ||
 		strings.HasPrefix(key, "adbc.statement.")
+}
+
+// uriSettings maps each accepted URI query parameter (lower case) to the
+// setting it controls. Several names for one setting are aliases.
+var uriSettings = map[string]string{
+	"tls": "tls", "ssl": "tls", "security": "tls",
+	"tls_ca_cert": "tls_ca_cert", "sslcertificate": "tls_ca_cert", "ca_cert": "tls_ca_cert",
+	"tls_skip_verify":    "tls_skip_verify",
+	"secmec":             "security_mechanism",
+	"security_mechanism": "security_mechanism",
+	"securitymechanism":  "security_mechanism",
+	"schema":             "current_schema", "current_schema": "current_schema", "currentschema": "current_schema",
+	"query_block_size": "block_size", "block_size": "block_size", "queryblocksize": "block_size",
+	"connect_timeout": "connect_timeout", "connect_timeout_seconds": "connect_timeout", "logintimeout": "connect_timeout",
+	"application_name": "application_name", "applicationname": "application_name",
+	"clientapplicationinformation": "application_name",
+	"package":                      "package",
+	"trace":                        "trace",
+	"trace_file":                   "trace_file",
+	"batch_size":                   "batch_rows", "batch_rows": "batch_rows",
+	"batch_bytes": "batch_bytes",
+	"user":        "user", "uid": "user",
+	"password": "password", "pwd": "password",
+}
+
+// uriParam is one URI query parameter: the setting it controls, the name
+// the URI used for it and its value.
+type uriParam struct {
+	setting, name, value string
+}
+
+// uriParameters parses a URI's query into one parameter per setting, in a
+// fixed order (by setting name). A URI that gives one setting different
+// values, under two names (tls and ssl), two spellings (TLS and tls) or
+// twice under one name, is refused: which one wins would otherwise be up to
+// map iteration order. The error names the parameters, never the values.
+func uriParameters(rawQuery string) ([]uriParam, error) {
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return nil, errStatus(adbc.StatusInvalidArgument, "could not parse the URI's query parameters: %s", uriProblem(err))
+	}
+	names := make([]string, 0, len(q))
+	for name := range q {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	bySetting := map[string]uriParam{}
+	for _, name := range names {
+		setting, ok := uriSettings[strings.ToLower(name)]
+		if !ok {
+			return nil, errStatus(adbc.StatusInvalidArgument, "unknown URI parameter %q", name)
+		}
+		for _, v := range q[name] {
+			prev, seen := bySetting[setting]
+			if !seen {
+				bySetting[setting] = uriParam{setting: setting, name: name, value: v}
+				continue
+			}
+			if prev.value != v {
+				if prev.name == name {
+					return nil, errStatus(adbc.StatusInvalidArgument,
+						"URI parameter %q is given more than once with different values", name)
+				}
+				return nil, errStatus(adbc.StatusInvalidArgument,
+					"URI parameters %q and %q set the same thing with different values; give one", prev.name, name)
+			}
+		}
+	}
+	settings := make([]string, 0, len(bySetting))
+	for setting := range bySetting {
+		settings = append(settings, setting)
+	}
+	sort.Strings(settings)
+	out := make([]uriParam, 0, len(settings))
+	for _, setting := range settings {
+		out = append(out, bySetting[setting])
+	}
+	return out, nil
+}
+
+// uriProblem describes why a URI did not parse without quoting any of it:
+// the offending text can be part of a password.
+func uriProblem(err error) string {
+	var escapeErr url.EscapeError
+	if errors.As(err, &escapeErr) {
+		return "a \"%\" is not followed by two hex digits (percent-encode a \"%\" in a user name, password or parameter as %25)"
+	}
+	var hostErr url.InvalidHostError
+	if errors.As(err, &hostErr) {
+		return "invalid character in the host (percent-encode any \"/\", \"@\", \":\" or \"%\" in the user name or password)"
+	}
+	return "malformed URI (percent-encode special characters in the user name or password)"
+}
+
+// redactedURI returns the URI with any password (in the user info, or a
+// password=/pwd= query parameter) replaced by "xxxxx". A URI that does not
+// parse is not returned at all.
+func redactedURI(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", errStatus(adbc.StatusInvalidState, "the URI could not be parsed, so it is not returned (it may hold a password)")
+	}
+	if u.RawQuery != "" {
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return "", errStatus(adbc.StatusInvalidState, "the URI's query could not be parsed, so it is not returned (it may hold a password)")
+		}
+		changed := false
+		for name := range q {
+			if setting := uriSettings[strings.ToLower(name)]; setting == "password" {
+				for i := range q[name] {
+					q[name][i] = "xxxxx"
+				}
+				changed = true
+			}
+		}
+		if changed {
+			u.RawQuery = q.Encode()
+		}
+	}
+	return u.Redacted(), nil
 }

@@ -79,7 +79,7 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 | `tls_ca_cert=/path.pem` / `db2.tls.ca_cert` | CA bundle for self-signed servers |
 | `tls_skip_verify=true` / `db2.tls.skip_verify` | Skip certificate verification |
 | `secmec=9` / `db2.auth.security_mechanism` | DRDA security mechanism: `9` encrypted user id + password (default when the server allows it), `3` cleartext password (inside TLS this is fine), `4` user id only. An explicit setting **fails closed** — the connection errors instead of silently downgrading when the server refuses it. SECMEC protects the credentials only; use TLS to encrypt data in transit. The read-only connection option `db2.auth.security_mechanism_active` reports what was actually negotiated. |
-| `schema=NAME` / `db2.session.current_schema` | `SET CURRENT SCHEMA` after connecting |
+| `schema=NAME` / `db2.session.current_schema` | `SET CURRENT SCHEMA` after connecting; the name is used as given (quoted, so case matters) and must exist, or the connect fails with `NOT_FOUND` |
 | `application_name=X` / `db2.session.application_name` | Reported to the server |
 | `connect_timeout_seconds=30` / `db2.connect_timeout_seconds` | Connect timeout in seconds (a Go duration such as `1.5s` also works) |
 | `block_size=N` / `db2.query.block_size` | DRDA `QRYBLKSZ` in bytes (default 1 MiB) |
@@ -93,12 +93,17 @@ Option names follow the [ADBC driver style guide](https://adbc-drivers.org/build
 a `db2.` prefix (never `adbc.`, which is reserved for the ADBC specification's own options),
 query behaviour under `db2.query.*` and bulk ingest under `db2.ingest.*`. When a URI parameter
 and an option both set something, the option wins. The older URI parameters (`batch_size`,
-`query_block_size`, `connect_timeout`) still work.
+`query_block_size`, `connect_timeout`) still work, but a URI that gives one setting two different
+values (`?tls=true&ssl=false`, `?TLS=true&tls=false`, `?batch_size=1&batch_rows=2`) is refused with
+`INVALID_ARGUMENT`. Percent-encode special characters in the user name and password
+(`%25` for `%`, `%40` for `@`, `%2F` for `/`, `%3A` for `:`); reading the `uri` option back returns it with
+the password shown as `xxxxx`.
 
 **Renamed options.** Version 0.3.0 renamed every driver-specific option. The old names keep
 working, for setting and for reading back, and the first use of each in a process writes one
 line to stderr, `[db2] option "adbc.db2.batch_size" is deprecated; use "db2.query.batch_rows"`
-(the key names only, never the value). When both names are given, the new one wins.
+(the key names only, never the value). When one call (the options of `NewDatabase`/`db_kwargs`, or one
+`SetOptions`) gives both names, the new one wins; across separate calls, the last write wins.
 
 | Old name (deprecated) | New name |
 |---|---|

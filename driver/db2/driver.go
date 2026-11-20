@@ -43,7 +43,7 @@ func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) 
 func (d *driverImpl) NewDatabaseWithContext(_ context.Context, opts map[string]string) (adbc.Database, error) {
 	// Unknown keys are refused when the database opens (parseOptions), as
 	// before; here deprecated keys only get their current names.
-	db := &databaseImpl{alloc: d.alloc, opts: map[string]string{}, setByNewName: map[string]bool{}}
+	db := &databaseImpl{alloc: d.alloc, opts: map[string]string{}}
 	db.setAllLocked(opts)
 	return db, nil
 }
@@ -54,9 +54,6 @@ type databaseImpl struct {
 	// opts holds every option under its current name (deprecated keys are
 	// rewritten on the way in).
 	opts map[string]string
-	// setByNewName records the options given under their current name: a
-	// deprecated key set later does not override them.
-	setByNewName map[string]bool
 }
 
 func (d *databaseImpl) SetOptions(opts map[string]string) error {
@@ -71,32 +68,26 @@ func (d *databaseImpl) SetOptions(opts map[string]string) error {
 	return nil
 }
 
-// setAllLocked stores opts. New names go first, so that within one call
-// they win over a deprecated key for the same option. d.mu must be held
-// (or d not yet shared).
+// setAllLocked stores opts, one call's worth (NewDatabase's map or one
+// SetOptions). When the map gives an option under both its new and its
+// deprecated name, the new name's value is kept, whatever the map order.
+// Across separate calls the last write wins. d.mu must be held (or d not
+// yet shared).
 func (d *databaseImpl) setAllLocked(opts map[string]string) {
 	for k, v := range opts {
-		if _, old := deprecatedOptions[k]; !old {
-			d.setLocked(k, v)
+		if newKey, old := deprecatedOptions[k]; old {
+			if _, both := opts[newKey]; both {
+				canonicalOption(k) // still warn about the old name
+				continue
+			}
 		}
-	}
-	for k, v := range opts {
-		if _, old := deprecatedOptions[k]; old {
-			d.setLocked(k, v)
-		}
+		d.setLocked(k, v)
 	}
 }
 
-// setLocked stores one option under its current name; a deprecated key
-// never overrides a value given under the new name. d.mu must be held.
+// setLocked stores one option under its current name. d.mu must be held.
 func (d *databaseImpl) setLocked(key, value string) {
-	key, deprecated := canonicalOption(key)
-	if deprecated && d.setByNewName[key] {
-		return
-	}
-	if !deprecated {
-		d.setByNewName[key] = true
-	}
+	key, _ = canonicalOption(key)
 	d.opts[key] = value
 }
 
@@ -153,15 +144,31 @@ func (c *connectionImpl) applyCurrentSchema(ctx context.Context) (adbc.Connectio
 	if schema == "" {
 		return c, nil
 	}
-	if _, err := c.conn.ExecImmediate(ctx, "SET CURRENT SCHEMA "+quoteIdent(schema)); err != nil {
-		_ = c.Close()
-		return nil, fromDRDAError(err)
-	}
-	if err := c.autoCommitIfNeeded(ctx); err != nil {
+	if err := c.setCurrentSchema(ctx, schema); err != nil {
 		_ = c.Close()
 		return nil, err
 	}
 	return c, nil
+}
+
+// setCurrentSchema makes schema current (SET CURRENT SCHEMA, the name used
+// as given, quoted). Db2 accepts SET CURRENT SCHEMA for a schema that does
+// not exist (it is just a special register), so a misspelled name would go
+// unnoticed until the next unqualified statement; ADBC reports NOT_FOUND
+// instead. Running SET CURRENT SCHEMA as SQL still works for a schema that a
+// later CREATE will create implicitly.
+func (c *connectionImpl) setCurrentSchema(ctx context.Context, schema string) error {
+	_, rows, err := c.queryAll(ctx, "SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = "+sqlString(schema))
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return errStatus(adbc.StatusNotFound, "schema %q does not exist", schema)
+	}
+	if _, err := c.conn.ExecImmediate(ctx, "SET CURRENT SCHEMA "+quoteIdent(schema)); err != nil {
+		return fromDRDAError(err)
+	}
+	return c.autoCommitIfNeeded(ctx)
 }
 
 func (d *databaseImpl) Close() error { return nil }
@@ -240,8 +247,9 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 	return fromDRDAError(c.conn.Rollback(ctx))
 }
 
-func (c *connectionImpl) SetOption(key, value string) error {
-	key, _ = canonicalOption(key)
+func (c *connectionImpl) SetOption(name, value string) error {
+	// name is what the caller wrote; errors name it.
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		switch value {
@@ -260,24 +268,7 @@ func (c *connectionImpl) SetOption(key, value string) error {
 		}
 		return nil
 	case adbc.OptionKeyCurrentDbSchema:
-		// Db2 accepts SET CURRENT SCHEMA for a schema that does not exist
-		// (it is just a special register), so a misspelled name would go
-		// unnoticed until the next unqualified statement. ADBC reports
-		// NOT_FOUND instead. Running SET CURRENT SCHEMA as SQL still works
-		// for a schema that a later CREATE will create implicitly.
-		_, rows, err := c.queryAll(context.Background(),
-			"SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = "+sqlString(value))
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return errStatus(adbc.StatusNotFound, "schema %q does not exist", value)
-		}
-		_, err = c.conn.ExecImmediate(context.Background(), "SET CURRENT SCHEMA "+quoteIdent(value))
-		if err != nil {
-			return fromDRDAError(err)
-		}
-		return c.autoCommitIfNeeded(context.Background())
+		return c.setCurrentSchema(context.Background(), value)
 	case adbc.OptionKeyIsolationLevel:
 		var iso string
 		switch value {
@@ -304,13 +295,13 @@ func (c *connectionImpl) SetOption(key, value string) error {
 			// the option so generic tooling works, without enforcement.
 			return nil
 		}
-		return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 	}
-	return errStatus(adbc.StatusNotImplemented, "unknown connection option %q", key)
+	return errStatus(adbc.StatusNotImplemented, "unknown connection option %q", name)
 }
 
-func (c *connectionImpl) GetOption(key string) (string, error) {
-	key, _ = canonicalOption(key)
+func (c *connectionImpl) GetOption(name string) (string, error) {
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		if c.autoCommit {
@@ -328,7 +319,7 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 	case OptionSecurityMechanismActive:
 		return strconv.Itoa(int(c.conn.SecurityMechanism())), nil
 	}
-	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", key)
+	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", name)
 }
 
 func (c *connectionImpl) ReadPartition(context.Context, []byte) (array.RecordReader, error) {
@@ -362,12 +353,9 @@ type statementImpl struct {
 	ingestTemporary     bool
 	ingestVarcharLength int
 	ingestBatchRows     int
-	// setByNewName records the options given under their current name: a
-	// deprecated key set later does not override them.
-	setByNewName map[string]bool
-	closed       bool
-	bound        arrow.Record
-	boundStream  array.RecordReader
+	closed              bool
+	bound               arrow.Record
+	boundStream         array.RecordReader
 }
 
 func (s *statementImpl) Close() error {
@@ -392,11 +380,10 @@ func (s *statementImpl) clearBound() {
 
 func (s *statementImpl) SetSqlQuery(sql string) error { s.sql = addDummyFrom(sql); return nil }
 
-func (s *statementImpl) SetOption(key, value string) error {
-	key, deprecated := canonicalOption(key)
-	if deprecated && s.setByNewName[key] {
-		return nil
-	}
+func (s *statementImpl) SetOption(name, value string) error {
+	// name is what the caller wrote; errors name it. Each call is validated
+	// and the last write wins, whichever name it uses.
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyIngestTargetTable:
 		s.targetTable = value
@@ -417,28 +404,22 @@ func (s *statementImpl) SetOption(key, value string) error {
 		case adbc.OptionValueDisabled:
 			s.ingestTemporary = false
 		default:
-			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 		}
 	case OptionIngestVarcharLength:
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {
-			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 		}
 		s.ingestVarcharLength = n
 	case OptionIngestBatchRows:
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {
-			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 		}
 		s.ingestBatchRows = n
 	default:
-		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", key)
-	}
-	if !deprecated {
-		if s.setByNewName == nil {
-			s.setByNewName = map[string]bool{}
-		}
-		s.setByNewName[key] = true
+		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", name)
 	}
 	return nil
 }

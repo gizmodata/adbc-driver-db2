@@ -36,7 +36,8 @@ The old names keep working, with a deprecation warning.
   - `adbc.db2.ingest.varchar_length` → `db2.ingest.varchar_length`
   - `adbc.db2.ingest.batch_rows` → `db2.ingest.batch_rows`
 - **Error messages** start with the driver's slug, `[db2] …`, as the style guide asks (they started with `db2: `, `[Db2] ` or nothing).
-- **URI parameters**: `batch_rows`, `block_size` and `connect_timeout_seconds` are accepted alongside `batch_size`, `query_block_size` and `connect_timeout`, matching the new option names.
+- **URI parameters**: `batch_rows`, `block_size` and `connect_timeout_seconds` are accepted alongside `batch_size`, `query_block_size` and `connect_timeout`, matching the new option names. A URI that sets one setting to two different values, under two names (`tls`/`ssl`, `secmec`/`security_mechanism`, `batch_size`/`batch_rows`, …), two spellings (`TLS`/`tls`) or one name twice, is now refused with `INVALID_ARGUMENT` naming the parameters (never their values); before, which one won was random. The same value twice is fine.
+- **Upgrade note, current schema**: `db2.session.current_schema` (`adbc.db2.current_schema`) and `?schema=` were ignored before 0.3.0 and are now applied when the connection opens. The schema must exist, or the connect fails with `NOT_FOUND` (`[db2] schema "X" does not exist`), the same check `adbc.connection.db_schema` makes; the name is used as given (quoted), so `schema=sales` means the lower-case schema `sales`. Remove the option, or fix its case, if a connection that worked on 0.2 now fails.
 - **Python**: `DatabaseOptions` carries the new names (member names unchanged) and gains `TRACE_FILE`, `PACKAGE` and `NO_AUTO_BIND`; `ConnectionOptions.SECURITY_MECHANISM_ACTIVE` and `StatementOptions.INGEST_VARCHAR_LENGTH` / `INGEST_BATCH_ROWS` replace the reserved placeholders. The `dbapi.connect` docstring no longer names options this driver doesn't have.
 - **README and PyPI page**: a badge stating the driver follows the ADBC driver style guide. The PyPI page (`python/README.md`) carries the repository README's branding (badge row with PyPI version, Python versions and downloads, tagline, GizmoData footer and trademark line), with absolute links and image URLs so PyPI shows them, and an Options section.
 - **PyPI page**: the package's description on PyPI is now its own Python-only page, `python/README.md` (install, requirements, connect and query, streaming, loading the driver by name), linking to the repository README for other languages, the one-line installer and the full reference; the repository README keeps everything. `python/tests/test_pypi_readme.py` runs every Python example on that page against the live database.
@@ -46,11 +47,13 @@ The old names keep working, with a deprecation warning.
 
 ### Fixed
 
-- **Current schema on connect**: `db2.session.current_schema` (formerly `adbc.db2.current_schema`) and the URI's `schema=` parameter were parsed but never applied; the connection now runs `SET CURRENT SCHEMA` when it opens, as documented (the name is used as given, like `adbc.connection.db_schema`).
+- **Current schema on connect**: `db2.session.current_schema` (formerly `adbc.db2.current_schema`) and the URI's `schema=` parameter were parsed but never applied; the connection now checks the schema exists and runs `SET CURRENT SCHEMA` when it opens, as documented (see the upgrade note above).
+- **Security: passwords in URIs.** A URI that fails to parse was echoed whole in the error, password included (`[db2] invalid URI "db2://admin:Pa%ss%word@…"`), and a password with an unencoded `/` could surface in an "invalid port" error. Errors now describe the problem without quoting the URI. Reading the `uri` option back (`GetOption("uri")`) returned the password; it now returns the URI with the password, in the user info and in `password=`/`pwd=` parameters, shown as `xxxxx` (a URI that does not parse is not returned).
+- **Tracing**: `db2.trace=false` (or `?trace=false`) together with a trace file turned tracing on or off at random; an explicit trace setting now always decides, and a trace file alone still turns tracing on.
 
 ### Deprecated
 
-- The `adbc.db2.*` names above still work, both to set an option and to read it back with GetOption. The first use of each old name in a process writes one line to stderr, `[db2] option "adbc.db2.batch_size" is deprecated; use "db2.query.batch_rows"`; the line names the keys only, never the value. When both names are given, the new one wins, whatever the order.
+- The `adbc.db2.*` names above still work, both to set an option and to read it back with GetOption. The first use of each old name in a process writes one line to stderr, `[db2] option "adbc.db2.batch_size" is deprecated; use "db2.query.batch_rows"`; the line names the keys only, never the value. When one call (the options given to `NewDatabase`/`db_kwargs`, or one `SetOptions`) carries both names, the new one wins, whatever the order; across separate `SetOption` calls the last write wins, under either name, and every value is validated. Errors about an old name name the key you wrote.
 
 ## [0.2.6] - 2026-11-09
 
