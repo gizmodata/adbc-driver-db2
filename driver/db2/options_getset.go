@@ -18,11 +18,12 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.opts[key] = value
+	d.setLocked(key, value)
 	return nil
 }
 
 func (d *databaseImpl) GetOption(key string) (string, error) {
+	key, _ = canonicalOption(key)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if key == OptionPassword {
@@ -103,6 +104,7 @@ func (c *connectionImpl) SetOptionDouble(key string, value float64) error {
 // ---- statement ----
 
 func (s *statementImpl) GetOption(key string) (string, error) {
+	key, _ = canonicalOption(key)
 	switch key {
 	case adbc.OptionKeyIngestTargetTable:
 		return s.targetTable, nil
@@ -131,6 +133,7 @@ func (s *statementImpl) GetOptionBytes(key string) ([]byte, error) {
 }
 
 func (s *statementImpl) GetOptionInt(key string) (int64, error) {
+	key, _ = canonicalOption(key)
 	switch key {
 	case OptionIngestVarcharLength:
 		return int64(s.ingestVarcharLength), nil
@@ -149,7 +152,7 @@ func (s *statementImpl) SetOptionBytes(key string, value []byte) error {
 }
 
 func (s *statementImpl) SetOptionInt(key string, value int64) error {
-	switch key {
+	switch canonical, _ := canonicalOption(key); canonical {
 	case OptionIngestVarcharLength, OptionIngestBatchRows:
 		return s.SetOption(key, strconv.FormatInt(value, 10))
 	}

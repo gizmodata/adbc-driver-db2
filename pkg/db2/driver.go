@@ -76,7 +76,7 @@ var drv = db2.NewDriver(mallocator.NewMallocator())
 // since internal state of driver is unknown
 var globalPoison atomic.Bool
 
-const errPrefix = "[Db2] "
+const errPrefix = "[db2] "
 const logLevelEnvVar = "ADBC_DRIVER_DB2_LOG_LEVEL"
 
 func setErr(err *C.struct_AdbcError, format string, vals ...interface{}) {

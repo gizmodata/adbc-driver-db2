@@ -8,6 +8,7 @@
 [![PyPI version](https://badge.fury.io/py/adbc-driver-db2.svg)](https://badge.fury.io/py/adbc-driver-db2)
 [![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-db2.svg)](https://pypi.org/project/adbc-driver-db2/)
 [![ADBC conformance](https://img.shields.io/badge/ADBC-conformance%20suites%20passing-2ea44f.svg)](https://github.com/gizmodata/adbc-driver-db2/tree/main/validation)
+[![Follows the ADBC driver style guide](https://img.shields.io/badge/ADBC%20style%20guide-conforms-2ea44f.svg)](https://adbc-drivers.org/building-drivers/style-guide.html)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-db2)](LICENSE)
 [![Hardcharger](https://img.shields.io/badge/works%20with-Hardcharger%E2%84%A2-f15a24.svg)](https://gizmodata.com/hardcharger)
 
@@ -72,19 +73,55 @@ db2://[user[:password]@]host[:port]/DATABASE[?param=value&...]
 
 | URI parameter / ADBC option | Meaning |
 |---|---|
-| `tls=true` / `adbc.db2.tls` | TLS (Db2's SSL port is conventionally 50001; required for Db2 on Cloud) |
-| `tls_ca_cert=/path.pem` / `adbc.db2.tls.ca_cert` | CA bundle for self-signed servers |
-| `tls_skip_verify=true` / `adbc.db2.tls.skip_verify` | Skip certificate verification |
-| `secmec=9` / `adbc.db2.security_mechanism` | DRDA security mechanism: `9` encrypted user id + password (default when the server allows it), `3` cleartext password (inside TLS this is fine), `4` user id only. An explicit setting **fails closed** — the connection errors instead of silently downgrading when the server refuses it. SECMEC protects the credentials only; use TLS to encrypt data in transit. The read-only connection option `adbc.db2.security_mechanism_active` reports what was actually negotiated. |
-| `schema=NAME` / `adbc.db2.current_schema` | `SET CURRENT SCHEMA` after connecting |
-| `query_block_size=N` / `adbc.db2.query_block_size` | DRDA `QRYBLKSZ` in bytes (default 1 MiB) |
-| `batch_size=N` / `adbc.db2.batch_size` | Max rows per Arrow record batch (default 65536) |
-| `batch_bytes=N` / `adbc.db2.batch_bytes` | Approximate max bytes per Arrow record batch (default 8 MiB, which keeps batches under Flight SQL's 16 MiB gRPC cap; 0 = only `batch_size` applies) |
-| `connect_timeout=30` / `adbc.db2.connect_timeout` | Seconds or Go duration |
-| `application_name=X` / `adbc.db2.application_name` | Reported to the server |
-| `package=COLL.PKG` / `adbc.db2.package` | Dynamic-SQL package (default `NULLID.SYSSH200`); bound automatically if missing (`adbc.db2.no_auto_bind=true` disables) |
-| `trace=true|hex` / `adbc.db2.trace` | Log every DRDA message (`hex` adds payload dumps) |
-| `trace_file=/path` / `adbc.db2.trace_file` | Write the trace to a file instead of stderr (use from notebooks) |
+| host:port in the URI / `db2.host`, `db2.port` | Server (port defaults to 50000, or 50001 with TLS) |
+| path in the URI / `db2.database` | Database (RDB) name |
+| `tls=true` / `db2.tls` | TLS (Db2's SSL port is conventionally 50001; required for Db2 on Cloud) |
+| `tls_ca_cert=/path.pem` / `db2.tls.ca_cert` | CA bundle for self-signed servers |
+| `tls_skip_verify=true` / `db2.tls.skip_verify` | Skip certificate verification |
+| `secmec=9` / `db2.auth.security_mechanism` | DRDA security mechanism: `9` encrypted user id + password (default when the server allows it), `3` cleartext password (inside TLS this is fine), `4` user id only. An explicit setting **fails closed** — the connection errors instead of silently downgrading when the server refuses it. SECMEC protects the credentials only; use TLS to encrypt data in transit. The read-only connection option `db2.auth.security_mechanism_active` reports what was actually negotiated. |
+| `schema=NAME` / `db2.session.current_schema` | `SET CURRENT SCHEMA` after connecting |
+| `application_name=X` / `db2.session.application_name` | Reported to the server |
+| `connect_timeout_seconds=30` / `db2.connect_timeout_seconds` | Connect timeout in seconds (a Go duration such as `1.5s` also works) |
+| `block_size=N` / `db2.query.block_size` | DRDA `QRYBLKSZ` in bytes (default 1 MiB) |
+| `batch_rows=N` / `db2.query.batch_rows` | Max rows per Arrow record batch (default 65536) |
+| `batch_bytes=N` / `db2.query.batch_bytes` | Approximate max bytes per Arrow record batch (default 8 MiB, which keeps batches under Flight SQL's 16 MiB gRPC cap; 0 = only `batch_rows` applies) |
+| `package=COLL.PKG` / `db2.package` | Dynamic-SQL package (default `NULLID.SYSSH200`); bound automatically if missing (`db2.package.no_auto_bind=true` disables) |
+| `trace=true\|hex` / `db2.trace` | Log every DRDA message (`hex` adds payload dumps) |
+| `trace_file=/path` / `db2.trace.file` | Write the trace to a file instead of stderr (use from notebooks) |
+
+Option names follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html):
+a `db2.` prefix (never `adbc.`, which is reserved for the ADBC specification's own options),
+query behaviour under `db2.query.*` and bulk ingest under `db2.ingest.*`. When a URI parameter
+and an option both set something, the option wins. The older URI parameters (`batch_size`,
+`query_block_size`, `connect_timeout`) still work.
+
+**Renamed options.** Version 0.3.0 renamed every driver-specific option. The old names keep
+working, for setting and for reading back, and the first use of each in a process writes one
+line to stderr, `[db2] option "adbc.db2.batch_size" is deprecated; use "db2.query.batch_rows"`
+(the key names only, never the value). When both names are given, the new one wins.
+
+| Old name (deprecated) | New name |
+|---|---|
+| `adbc.db2.host` | `db2.host` |
+| `adbc.db2.port` | `db2.port` |
+| `adbc.db2.database` | `db2.database` |
+| `adbc.db2.tls` | `db2.tls` |
+| `adbc.db2.tls.ca_cert` | `db2.tls.ca_cert` |
+| `adbc.db2.tls.skip_verify` | `db2.tls.skip_verify` |
+| `adbc.db2.security_mechanism` | `db2.auth.security_mechanism` |
+| `adbc.db2.security_mechanism_active` | `db2.auth.security_mechanism_active` |
+| `adbc.db2.current_schema` | `db2.session.current_schema` |
+| `adbc.db2.application_name` | `db2.session.application_name` |
+| `adbc.db2.connect_timeout` | `db2.connect_timeout_seconds` |
+| `adbc.db2.query_block_size` | `db2.query.block_size` |
+| `adbc.db2.batch_size` | `db2.query.batch_rows` |
+| `adbc.db2.batch_bytes` | `db2.query.batch_bytes` |
+| `adbc.db2.trace` | `db2.trace` |
+| `adbc.db2.trace_file` | `db2.trace.file` |
+| `adbc.db2.package` | `db2.package` |
+| `adbc.db2.no_auto_bind` | `db2.package.no_auto_bind` |
+| `adbc.db2.ingest.varchar_length` | `db2.ingest.varchar_length` |
+| `adbc.db2.ingest.batch_rows` | `db2.ingest.batch_rows` |
 
 **Dynamic-SQL package (SQL0805N).** Db2 runs dynamic SQL inside a
 package. Db2 LUW ships `NULLID.SYSSH200`; Db2 for i and Db2 for z/OS do
@@ -154,17 +191,17 @@ with hardcharger.Server() as server, server.connect() as dst:
 ingest side. [Hardcharger](https://gizmodata.com/hardcharger) accepts messages up to its
 `max_ingest_message_bytes` (64 MiB by default), and Flight SQL targets usually cap gRPC
 messages at 16 MiB. The Db2 driver's batches fit both out of the box: a batch is capped
-at 65,536 rows (`batch_size`) **and** 8 MiB (`batch_bytes`), so even very wide tables
-stream through. Both knobs are tunable (URI parameter or `adbc.db2.*` in `db_kwargs`):
+at 65,536 rows (`db2.query.batch_rows`) **and** 8 MiB (`db2.query.batch_bytes`), so even very
+wide tables stream through. Both knobs are tunable (URI parameter or option in `db_kwargs`):
 
 ```python
 src = db2.connect(uri=db2_uri + "?batch_bytes=4194304", username=db2_user, password=db2_pw)
 # or, equivalently:
-src = db2.connect(uri=db2_uri, db_kwargs={"adbc.db2.batch_bytes": str(4 * 1024 * 1024)},
+src = db2.connect(uri=db2_uri, db_kwargs={"db2.query.batch_bytes": str(4 * 1024 * 1024)},
                   username=db2_user, password=db2_pw)
 ```
 
-`batch_bytes=0` removes the byte cap (batches then bound only by `batch_size` rows, a
+`batch_bytes=0` removes the byte cap (batches then bound only by `batch_rows` rows, a
 pre-0.2 default). Rows wider than about 1 KiB can then make a batch larger than 64 MiB,
 which Hardcharger refuses with HTTP 413 `payload_too_large`; keep the cap, or raise the
 server's `max_ingest_message_bytes`.
@@ -180,8 +217,8 @@ with db2.connect(uri=uri, username=user, password=pw, autocommit=True) as conn, 
 ```
 
 Rows are pipelined many per DRDA round trip (1000 by default;
-`adbc.db2.ingest.batch_rows`). `VARCHAR`/`VARBINARY` columns of a created
-table are sized from the first batch (`adbc.db2.ingest.varchar_length`
+`db2.ingest.batch_rows`). `VARCHAR`/`VARBINARY` columns of a created
+table are sized from the first batch (`db2.ingest.varchar_length`
 overrides) because Db2's row-size limit depends on the tablespace page
 size; values longer than a VARCHAR can hold (32,672 bytes) get a
 `CLOB`/`BLOB` column instead. Values over 32 KiB are sent as out-of-line

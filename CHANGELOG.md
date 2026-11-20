@@ -7,11 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-20
+
+Option names now follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html).
+The old names keep working, with a deprecation warning.
+
 ### Changed
 
+- **Option names**: every driver-specific option moved from `adbc.db2.*` (the `adbc.` prefix is reserved for the ADBC specification's own options) to the `db2.` vendor prefix, grouped as the style guide asks: query behaviour under `db2.query.*`, bulk ingest under `db2.ingest.*`, plus `db2.tls.*`, `db2.auth.*`, `db2.session.*` and `db2.package.*`. Specification options (`uri`, `username`, `password`, `adbc.connection.*`, `adbc.statement.*`, `adbc.ingest.*`) are unchanged. Old name → new name:
+  - `adbc.db2.host` → `db2.host`
+  - `adbc.db2.port` → `db2.port`
+  - `adbc.db2.database` → `db2.database`
+  - `adbc.db2.tls` → `db2.tls`
+  - `adbc.db2.tls.ca_cert` → `db2.tls.ca_cert`
+  - `adbc.db2.tls.skip_verify` → `db2.tls.skip_verify`
+  - `adbc.db2.security_mechanism` → `db2.auth.security_mechanism`
+  - `adbc.db2.security_mechanism_active` → `db2.auth.security_mechanism_active`
+  - `adbc.db2.current_schema` → `db2.session.current_schema`
+  - `adbc.db2.application_name` → `db2.session.application_name`
+  - `adbc.db2.connect_timeout` → `db2.connect_timeout_seconds`
+  - `adbc.db2.query_block_size` → `db2.query.block_size`
+  - `adbc.db2.batch_size` → `db2.query.batch_rows`
+  - `adbc.db2.batch_bytes` → `db2.query.batch_bytes`
+  - `adbc.db2.trace` → `db2.trace`
+  - `adbc.db2.trace_file` → `db2.trace.file`
+  - `adbc.db2.package` → `db2.package`
+  - `adbc.db2.no_auto_bind` → `db2.package.no_auto_bind`
+  - `adbc.db2.ingest.varchar_length` → `db2.ingest.varchar_length`
+  - `adbc.db2.ingest.batch_rows` → `db2.ingest.batch_rows`
+- **Error messages** start with the driver's slug, `[db2] …`, as the style guide asks (they started with `db2: `, `[Db2] ` or nothing).
+- **URI parameters**: `batch_rows`, `block_size` and `connect_timeout_seconds` are accepted alongside `batch_size`, `query_block_size` and `connect_timeout`, matching the new option names.
+- **Python**: `DatabaseOptions` carries the new names (member names unchanged) and gains `TRACE_FILE`, `PACKAGE` and `NO_AUTO_BIND`; `ConnectionOptions.SECURITY_MECHANISM_ACTIVE` and `StatementOptions.INGEST_VARCHAR_LENGTH` / `INGEST_BATCH_ROWS` replace the reserved placeholders. The `dbapi.connect` docstring no longer names options this driver doesn't have.
+- **README and PyPI page**: a badge stating the driver follows the ADBC driver style guide. The PyPI page (`python/README.md`) carries the repository README's branding (badge row with PyPI version, Python versions and downloads, tagline, GizmoData footer and trademark line), with absolute links and image URLs so PyPI shows them, and an Options section.
 - **PyPI page**: the package's description on PyPI is now its own Python-only page, `python/README.md` (install, requirements, connect and query, streaming, loading the driver by name), linking to the repository README for other languages, the one-line installer and the full reference; the repository README keeps everything. `python/tests/test_pypi_readme.py` runs every Python example on that page against the live database.
 - **README**: installing without Python is one line, `curl https://install.adbc.gizmodata.com/db2 | sh` (Linux, macOS) or `irm https://install.adbc.gizmodata.com/db2.ps1 | iex` (Windows): it installs the release's shared library, checked against its `SHA256SUMS`, and a `db2` driver manifest, so any ADBC driver manager loads it as `driver = "db2"` ([gizmodata/adbc-install](https://github.com/gizmodata/adbc-install)).
 - **CI**: a change that touches only documentation (`*.md`, `docs/`, `LICENSE`, `NOTICE`) skips the build and test jobs, and one job, `CI result`, reports on every run and is the only required check. The glibc-2.28 install check retries `dnf install` with fresh metadata, so a mirror serving a broken `repomd.xml` can't fail a build.
+- **Dependencies**: Apache Arrow Go v18.8.0 → v18.9.0, klauspost/compress v1.20.0 → v1.20.5, pierrec/lz4 v4.1.29 → v4.1.33, go.yaml.in/yaml v3.0.5 → v3.0.6, golang.org/x/tools v0.52.1-pre → v0.53.0, golang.org/x/exp to 2026-11-20; `toolchain go1.27.4` in `go.mod` (the `go` directive stays 1.26.7) and Go 1.27.4 in CI; zig 0.17.1 for the glibc-2.17 Linux builds; test extras hardcharger[adbc] ≥ 2.13.3 and duckdb ≠ 2.0.1 (released today, and Query.Farm has no `adbc_scanner` build for it yet); the adbc-drivers.org validation suite moved to e4c18a5.
+
+### Fixed
+
+- **Current schema on connect**: `db2.session.current_schema` (formerly `adbc.db2.current_schema`) and the URI's `schema=` parameter were parsed but never applied; the connection now runs `SET CURRENT SCHEMA` when it opens, as documented (the name is used as given, like `adbc.connection.db_schema`).
+
+### Deprecated
+
+- The `adbc.db2.*` names above still work, both to set an option and to read it back with GetOption. The first use of each old name in a process writes one line to stderr, `[db2] option "adbc.db2.batch_size" is deprecated; use "db2.query.batch_rows"`; the line names the keys only, never the value. When both names are given, the new one wins, whatever the order.
 
 ## [0.2.6] - 2026-11-09
 

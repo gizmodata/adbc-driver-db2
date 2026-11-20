@@ -41,13 +41,22 @@ func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) 
 }
 
 func (d *driverImpl) NewDatabaseWithContext(_ context.Context, opts map[string]string) (adbc.Database, error) {
-	return &databaseImpl{alloc: d.alloc, opts: cloneMap(opts)}, nil
+	// Unknown keys are refused when the database opens (parseOptions), as
+	// before; here deprecated keys only get their current names.
+	db := &databaseImpl{alloc: d.alloc, opts: map[string]string{}, setByNewName: map[string]bool{}}
+	db.setAllLocked(opts)
+	return db, nil
 }
 
 type databaseImpl struct {
 	alloc memory.Allocator
 	mu    sync.Mutex
-	opts  map[string]string
+	// opts holds every option under its current name (deprecated keys are
+	// rewritten on the way in).
+	opts map[string]string
+	// setByNewName records the options given under their current name: a
+	// deprecated key set later does not override them.
+	setByNewName map[string]bool
 }
 
 func (d *databaseImpl) SetOptions(opts map[string]string) error {
@@ -58,10 +67,37 @@ func (d *databaseImpl) SetOptions(opts map[string]string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for k, v := range opts {
-		d.opts[k] = v
-	}
+	d.setAllLocked(opts)
 	return nil
+}
+
+// setAllLocked stores opts. New names go first, so that within one call
+// they win over a deprecated key for the same option. d.mu must be held
+// (or d not yet shared).
+func (d *databaseImpl) setAllLocked(opts map[string]string) {
+	for k, v := range opts {
+		if _, old := deprecatedOptions[k]; !old {
+			d.setLocked(k, v)
+		}
+	}
+	for k, v := range opts {
+		if _, old := deprecatedOptions[k]; old {
+			d.setLocked(k, v)
+		}
+	}
+}
+
+// setLocked stores one option under its current name; a deprecated key
+// never overrides a value given under the new name. d.mu must be held.
+func (d *databaseImpl) setLocked(key, value string) {
+	key, deprecated := canonicalOption(key)
+	if deprecated && d.setByNewName[key] {
+		return
+	}
+	if !deprecated {
+		d.setByNewName[key] = true
+	}
+	d.opts[key] = value
 }
 
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
@@ -83,7 +119,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 			f, err := os.OpenFile(cfg.traceFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
 				conn.Close()
-				return nil, errStatus(adbc.StatusInvalidArgument, "db2: open trace file: %v", err)
+				return nil, errStatus(adbc.StatusInvalidArgument, "open trace file: %v", err)
 			}
 			w, closer = f, f
 		}
@@ -95,18 +131,37 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		}
 		conn.TraceHex = cfg.traceHex
 		conn.Trace("driver %s connected: server=%+v", driverVersion(), conn.Server)
-		if closer != nil {
-			c := &connectionImpl{db: d, conn: conn, alloc: d.alloc, cfg: cfg, autoCommit: true, traceCloser: closer}
-			return c, nil
-		}
+		c := &connectionImpl{db: d, conn: conn, alloc: d.alloc, cfg: cfg, autoCommit: true, traceCloser: closer}
+		return c.applyCurrentSchema(ctx)
 	}
-	return &connectionImpl{
+	c := &connectionImpl{
 		db:         d,
 		conn:       conn,
 		alloc:      d.alloc,
 		cfg:        cfg,
 		autoCommit: true,
-	}, nil
+	}
+	return c.applyCurrentSchema(ctx)
+}
+
+// applyCurrentSchema runs SET CURRENT SCHEMA for db2.session.current_schema
+// (or the URI's schema= parameter) on a new connection; on failure it closes
+// the connection. The name is used as given (quoted), like
+// adbc.connection.db_schema.
+func (c *connectionImpl) applyCurrentSchema(ctx context.Context) (adbc.Connection, error) {
+	schema := c.cfg.drda.CurrentSchema
+	if schema == "" {
+		return c, nil
+	}
+	if _, err := c.conn.ExecImmediate(ctx, "SET CURRENT SCHEMA "+quoteIdent(schema)); err != nil {
+		_ = c.Close()
+		return nil, fromDRDAError(err)
+	}
+	if err := c.autoCommitIfNeeded(ctx); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return c, nil
 }
 
 func (d *databaseImpl) Close() error { return nil }
@@ -186,6 +241,7 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 }
 
 func (c *connectionImpl) SetOption(key, value string) error {
+	key, _ = canonicalOption(key)
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		switch value {
@@ -215,7 +271,7 @@ func (c *connectionImpl) SetOption(key, value string) error {
 			return err
 		}
 		if len(rows) == 0 {
-			return errStatus(adbc.StatusNotFound, "db2: schema %q does not exist", value)
+			return errStatus(adbc.StatusNotFound, "schema %q does not exist", value)
 		}
 		_, err = c.conn.ExecImmediate(context.Background(), "SET CURRENT SCHEMA "+quoteIdent(value))
 		if err != nil {
@@ -254,6 +310,7 @@ func (c *connectionImpl) SetOption(key, value string) error {
 }
 
 func (c *connectionImpl) GetOption(key string) (string, error) {
+	key, _ = canonicalOption(key)
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		if c.autoCommit {
@@ -305,9 +362,12 @@ type statementImpl struct {
 	ingestTemporary     bool
 	ingestVarcharLength int
 	ingestBatchRows     int
-	closed              bool
-	bound               arrow.Record
-	boundStream         array.RecordReader
+	// setByNewName records the options given under their current name: a
+	// deprecated key set later does not override them.
+	setByNewName map[string]bool
+	closed       bool
+	bound        arrow.Record
+	boundStream  array.RecordReader
 }
 
 func (s *statementImpl) Close() error {
@@ -333,6 +393,10 @@ func (s *statementImpl) clearBound() {
 func (s *statementImpl) SetSqlQuery(sql string) error { s.sql = addDummyFrom(sql); return nil }
 
 func (s *statementImpl) SetOption(key, value string) error {
+	key, deprecated := canonicalOption(key)
+	if deprecated && s.setByNewName[key] {
+		return nil
+	}
 	switch key {
 	case adbc.OptionKeyIngestTargetTable:
 		s.targetTable = value
@@ -369,6 +433,12 @@ func (s *statementImpl) SetOption(key, value string) error {
 		s.ingestBatchRows = n
 	default:
 		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", key)
+	}
+	if !deprecated {
+		if s.setByNewName == nil {
+			s.setByNewName = map[string]bool{}
+		}
+		s.setByNewName[key] = true
 	}
 	return nil
 }
@@ -417,7 +487,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	if len(q.Columns) != len(q.Fields) {
 		_ = q.Close(ctx)
 		return nil, -1, errStatus(adbc.StatusInternal,
-			"db2: result descriptor mismatch: SQLDARD describes %d columns but QRYDSC has %d fields (please report with adbc.db2.trace=hex)",
+			"result descriptor mismatch: SQLDARD describes %d columns but QRYDSC has %d fields (please report with db2.trace=hex)",
 			len(q.Columns), len(q.Fields))
 	}
 	return newStreamingRecordReader(ctx, s.conn, q, s.conn.cfg.batchSize), -1, nil

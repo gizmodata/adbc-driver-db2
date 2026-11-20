@@ -98,9 +98,10 @@ def connect(
     username, password:
         Credentials, if not embedded in the URI.
     db_kwargs:
-        Optional mapping of ADBC database options. Common keys:
-        ``adbc.db2.token`` for the auth token,
-        ``adbc.db2.tls`` to use HTTPS.
+        Optional mapping of ADBC database options; see
+        :class:`adbc_driver_db2.DatabaseOptions`. Common keys:
+        ``db2.tls`` (``"true"``) for TLS,
+        ``db2.session.current_schema`` for the current schema.
     conn_kwargs:
         Optional mapping of ADBC connection options.
     autocommit:
