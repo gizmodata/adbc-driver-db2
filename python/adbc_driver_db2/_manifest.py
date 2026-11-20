@@ -49,6 +49,18 @@ def _platform_tuple() -> str:
     return f"{os_name}_{arch}"
 
 
+def _shared_keys() -> list[str]:
+    """The ``Driver.shared`` keys naming this library.
+
+    On Windows the same library is named twice: ``windows_<arch>`` for driver
+    managers built with MSVC (Python, Rust, ...), ``windows_<arch>_mingw`` for
+    those built with MinGW (R's adbcdrivermanager, built with Rtools). The
+    library exports plain C functions, so both kinds load it.
+    """
+    key = _platform_tuple()
+    return [key, f"{key}_mingw"] if key.startswith("windows_") else [key]
+
+
 def _user_config_dir() -> pathlib.Path:
     """Per-user ADBC driver-manifest directory for this OS."""
     if sys.platform == "darwin":
@@ -91,6 +103,7 @@ def render_manifest() -> str:
     # AdbcDriverDb2Init is the entrypoint the ADBC driver manager derives from
     # the library's name (libadbc_driver_db2.*); naming it keeps the manifest
     # explicit. Db2DriverInit is a deprecated alias, removed in 1.0.
+    shared = "\n".join(f"{key} = '{driver_path}'" for key in _shared_keys())
     return f"""\
 manifest_version = 1
 name = 'ADBC Db2 Driver - Go'
@@ -106,7 +119,7 @@ version = '1.1.0'
 entrypoint = 'AdbcDriverDb2Init'
 
 [Driver.shared]
-{_platform_tuple()} = '{driver_path}'
+{shared}
 """
 
 

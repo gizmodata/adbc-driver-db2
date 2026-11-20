@@ -47,6 +47,7 @@ The old names keep working, with a deprecation warning.
 
 ### Fixed
 
+- On Windows, the driver manifest that `python -m adbc_driver_db2 install-manifest` writes also names the library under `windows_<arch>_mingw`, the key R's `adbcdrivermanager` (built with MinGW) looks up, so loading the driver by name from R on Windows works ([gizmodata/adbc-install#10](https://github.com/gizmodata/adbc-install/issues/10)). Run it again to update an existing manifest.
 - **Current schema on connect**: `db2.session.current_schema` (formerly `adbc.db2.current_schema`) and the URI's `schema=` parameter were parsed but never applied; the connection now checks the schema exists and runs `SET CURRENT SCHEMA` when it opens, as documented (see the upgrade note above).
 - **Security: passwords in URIs.** A URI that fails to parse was echoed whole in the error, password included (`[db2] invalid URI "db2://admin:Pa%ss%word@…"`), and a password with an unencoded `/` could surface in an "invalid port" error. Errors now describe the problem without quoting the URI. Reading the `uri` option back (`GetOption("uri")`) returned the password; it now returns the URI with the password, in the user info and in `password=`/`pwd=` parameters, shown as `xxxxx` (a URI that does not parse is not returned).
 - **Tracing**: `db2.trace=false` (or `?trace=false`) together with a trace file turned tracing on or off at random; an explicit trace setting now always decides, and a trace file alone still turns tracing on.
