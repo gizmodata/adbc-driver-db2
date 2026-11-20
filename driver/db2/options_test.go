@@ -2,6 +2,7 @@ package db2
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -341,4 +342,57 @@ func TestURIParametersMatchOptionNames(t *testing.T) {
 	cfg, err = parseOptions(map[string]string{OptionURI: "db2://u@h/SAMPLE?batch_rows=123", OptionBatchSize: "456"})
 	require.NoError(t, err)
 	require.Equal(t, 456, cfg.batchSize)
+}
+
+// gizmodata/adbc-install's canary (.github/scripts/check_driver_by_name.py)
+// checks that connecting to db2://user:pass@127.0.0.1:1/database fails with
+// a message containing "drda: connect 127.0.0.1:1". The [db2] prefix may go
+// in front; that substring must not change.
+func TestConnectErrorKeepsCanarySubstring(t *testing.T) {
+	db := newTestDatabase(t, map[string]string{OptionURI: "db2://user:pass@127.0.0.1:1/database"})
+	_, err := db.Open(context.Background())
+	var ae adbc.Error
+	require.ErrorAs(t, err, &ae)
+	require.True(t, strings.HasPrefix(ae.Msg, "[db2] "), ae.Msg)
+	require.Contains(t, ae.Msg, "drda: connect 127.0.0.1:1")
+}
+
+// Unknown keys, including ones under the old adbc.db2. prefix, are refused
+// under the exact spelling the caller wrote, never under a rewritten name.
+func TestUnknownOptionRefusedUnderCallersSpelling(t *testing.T) {
+	buf := captureWarnings(t)
+	uri := "db2://u@db2.example.invalid/SAMPLE"
+	for _, key := range []string{"adbc.db2.no_such_option", "db2.no_such_option", "adbc.db2.Host"} {
+		want := fmt.Sprintf("[db2] unknown database option %q", key)
+		var ae adbc.Error
+
+		db := newTestDatabase(t, nil)
+		require.ErrorAs(t, db.SetOption(key, "x"), &ae, key)
+		require.Equal(t, adbc.StatusNotImplemented, ae.Code)
+		require.Equal(t, want, ae.Msg)
+
+		require.ErrorAs(t, db.SetOptions(map[string]string{key: "x"}), &ae, key)
+		require.Equal(t, want, ae.Msg)
+
+		_, err := db.GetOption(key)
+		require.ErrorAs(t, err, &ae, key)
+		require.Equal(t, adbc.StatusNotFound, ae.Code)
+		require.Equal(t, want, ae.Msg)
+
+		// Given at NewDatabase, the key is refused when the database opens.
+		db = newTestDatabase(t, map[string]string{OptionURI: uri, key: "x"})
+		_, err = db.Open(context.Background())
+		require.ErrorAs(t, err, &ae, key)
+		require.Equal(t, adbc.StatusNotImplemented, ae.Code)
+		require.Equal(t, want, ae.Msg)
+
+		st := &statementImpl{}
+		require.ErrorAs(t, st.SetOption(key, "x"), &ae, key)
+		require.Equal(t, fmt.Sprintf("[db2] unknown statement option %q", key), ae.Msg)
+
+		c := &connectionImpl{cfg: &connConfig{}}
+		require.ErrorAs(t, c.SetOption(key, "x"), &ae, key)
+		require.Equal(t, fmt.Sprintf("[db2] unknown connection option %q", key), ae.Msg)
+	}
+	require.Empty(t, buf.String(), "unknown keys are not deprecated aliases")
 }
