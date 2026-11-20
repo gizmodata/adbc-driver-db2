@@ -132,7 +132,7 @@ func driverVersion() string {
 const arrowModule = "github.com/apache/arrow-go/v18"
 
 // arrowVersion reports the arrow-go release linked into this build (e.g.
-// "v18.8.0"), read from the module build info; "v18" if that is missing.
+// "v18.9.0"), read from the module build info; "v18" if that is missing.
 func arrowVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, dep := range info.Deps {

@@ -70,17 +70,17 @@ debugging.
   offers SECMEC 3 only). CI runs `ghcr.io/gizmodata/hardcharger:latest` with
   `--network host` and `pkg/db2` mounted at `/drivers`.
 - Security semantics (mirror the Oracle driver's NNE posture): an
-  *explicitly* set `adbc.db2.security_mechanism` fails closed — the
+  *explicitly* set `db2.auth.security_mechanism` fails closed — the
   handshake errors instead of renegotiating when the server counters
   (guard in `Conn.handshake`); only the automatic default (option unset)
   may downgrade via `pickSecMec`. SECMEC 9 encrypts credentials only —
   TLS is the data-in-transit protection. Read-only
-  `adbc.db2.security_mechanism_active` reports the negotiated SECMEC.
+  `db2.auth.security_mechanism_active` reports the negotiated SECMEC.
   The community container accepts SECMEC 3 only, which is what
   `test_security.py` / `security_integration_test.go` rely on (the
   wire-proxy test proves the password stays off the wire when an
   explicit 9 is refused).
-- `batch_bytes` defaults to 8 MiB (Flight-safe; 0 = unlimited), matching
+- `db2.query.batch_bytes` defaults to 8 MiB (Flight-safe; 0 = unlimited), matching
   the Oracle driver.
 
 ## Protocol details the DRDA V5 spec underspecifies (confirmed against a live server)
@@ -102,8 +102,14 @@ debugging.
 
 ## Conventions
 
-- Go 1.26 floor, Arrow Go v18, arrow-adbc v1.13 (keep in step with hardcharger-adbc).
-- Options: `adbc.db2.<noun>`; driver name "ADBC Db2 Driver - Go".
+- Go 1.26 floor (toolchain go1.27.4), Arrow Go v18, arrow-adbc v1.13 (keep in step with hardcharger-adbc).
+- Options follow the ADBC driver style guide
+  (https://adbc-drivers.org/building-drivers/style-guide.html): `db2[.group].option`,
+  never `adbc.` (spec-defined keys only); query behaviour `db2.query.*`, bulk ingest
+  `db2.ingest.*`, TLS `db2.tls.*`, auth `db2.auth.*`, session `db2.session.*`. The pre-0.3.0
+  `adbc.db2.*` names are aliases in `driver/db2/deprecated_options.go` (one stderr warning
+  per old key per process, key names only). Error messages start with `[db2] `.
+  Driver name "ADBC Db2 Driver - Go".
 - Keep `CHANGELOG.md` `[Unreleased]` current; semver tags `vX.Y.Z`;
   bump `driver/db2/version.go` and `python/adbc_driver_db2/_version.py`
   together.

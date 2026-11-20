@@ -21,10 +21,10 @@ const (
 	// value, at least 64, at most 32672). Db2's row-size limit depends
 	// on the tablespace page size (about 4005 bytes on 4K pages), so a
 	// fixed generous length can make CREATE TABLE fail on wide tables.
-	OptionIngestVarcharLength = "adbc.db2.ingest.varchar_length"
+	OptionIngestVarcharLength = "db2.ingest.varchar_length"
 	// OptionIngestBatchRows caps the rows pipelined per DRDA round trip
 	// (default 1000).
-	OptionIngestBatchRows = "adbc.db2.ingest.batch_rows"
+	OptionIngestBatchRows = "db2.ingest.batch_rows"
 )
 
 const (
@@ -77,7 +77,7 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 		if errors.As(err, &ca) && ca.SQLCode == -204 {
 			// Report the ODBC-style "table not found" SQLSTATE consumers
 			// of ADBC ingest look for.
-			e := adbc.Error{Code: adbc.StatusNotFound, Msg: "ingest: " + ca.Error(), VendorCode: ca.SQLCode}
+			e := adbc.Error{Code: adbc.StatusNotFound, Msg: driverMessage("ingest: " + ca.Error()), VendorCode: ca.SQLCode}
 			copy(e.SqlState[:], "42S02")
 			return -1, e
 		}
@@ -196,7 +196,7 @@ func (s *statementImpl) prepareIngestTarget(ctx context.Context, schema *arrow.S
 	switch mode {
 	case adbc.OptionValueIngestModeCreate:
 		if exists {
-			return adbc.Error{Code: adbc.StatusAlreadyExists, Msg: fmt.Sprintf("ingest: table %s already exists (use mode append, create_append or replace)", s.ingestTarget())}
+			return adbc.Error{Code: adbc.StatusAlreadyExists, Msg: driverMessage(fmt.Sprintf("ingest: table %s already exists (use mode append, create_append or replace)", s.ingestTarget()))}
 		}
 	case adbc.OptionValueIngestModeCreateAppend:
 		if exists {
@@ -212,7 +212,7 @@ func (s *statementImpl) prepareIngestTarget(ctx context.Context, schema *arrow.S
 	if _, err := conn.conn.ExecImmediate(ctx, ddl); err != nil {
 		var ca *drda.SQLCA
 		if errors.As(err, &ca) && ca.SQLCode == -601 {
-			return adbc.Error{Code: adbc.StatusAlreadyExists, Msg: "ingest: " + ca.Error(), VendorCode: ca.SQLCode}
+			return adbc.Error{Code: adbc.StatusAlreadyExists, Msg: driverMessage("ingest: " + ca.Error()), VendorCode: ca.SQLCode}
 		}
 		return fromDRDAError(err)
 	}
@@ -228,7 +228,7 @@ func (s *statementImpl) checkAppendSchema(ctx context.Context, schema *arrow.Sch
 	if err != nil {
 		var ca *drda.SQLCA
 		if errors.As(err, &ca) && ca.SQLCode == -204 {
-			e := adbc.Error{Code: adbc.StatusNotFound, Msg: "ingest: " + ca.Error(), VendorCode: ca.SQLCode}
+			e := adbc.Error{Code: adbc.StatusNotFound, Msg: driverMessage("ingest: " + ca.Error()), VendorCode: ca.SQLCode}
 			copy(e.SqlState[:], "42S02")
 			return e
 		}
@@ -241,7 +241,7 @@ func (s *statementImpl) checkAppendSchema(ctx context.Context, schema *arrow.Sch
 	for _, f := range schema.Fields() {
 		if !have[f.Name] {
 			return adbc.Error{Code: adbc.StatusAlreadyExists,
-				Msg: fmt.Sprintf("ingest: table %s has no column %q, so the data does not match its schema", s.ingestTarget(), f.Name)}
+				Msg: driverMessage(fmt.Sprintf("ingest: table %s has no column %q, so the data does not match its schema", s.ingestTarget(), f.Name))}
 		}
 	}
 	return nil

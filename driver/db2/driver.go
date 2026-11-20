@@ -41,13 +41,19 @@ func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) 
 }
 
 func (d *driverImpl) NewDatabaseWithContext(_ context.Context, opts map[string]string) (adbc.Database, error) {
-	return &databaseImpl{alloc: d.alloc, opts: cloneMap(opts)}, nil
+	// Unknown keys are refused when the database opens (parseOptions), as
+	// before; here deprecated keys only get their current names.
+	db := &databaseImpl{alloc: d.alloc, opts: map[string]string{}}
+	db.setAllLocked(opts)
+	return db, nil
 }
 
 type databaseImpl struct {
 	alloc memory.Allocator
 	mu    sync.Mutex
-	opts  map[string]string
+	// opts holds every option under its current name (deprecated keys are
+	// rewritten on the way in).
+	opts map[string]string
 }
 
 func (d *databaseImpl) SetOptions(opts map[string]string) error {
@@ -58,10 +64,31 @@ func (d *databaseImpl) SetOptions(opts map[string]string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for k, v := range opts {
-		d.opts[k] = v
-	}
+	d.setAllLocked(opts)
 	return nil
+}
+
+// setAllLocked stores opts, one call's worth (NewDatabase's map or one
+// SetOptions). When the map gives an option under both its new and its
+// deprecated name, the new name's value is kept, whatever the map order.
+// Across separate calls the last write wins. d.mu must be held (or d not
+// yet shared).
+func (d *databaseImpl) setAllLocked(opts map[string]string) {
+	for k, v := range opts {
+		if newKey, old := deprecatedOptions[k]; old {
+			if _, both := opts[newKey]; both {
+				canonicalOption(k) // still warn about the old name
+				continue
+			}
+		}
+		d.setLocked(k, v)
+	}
+}
+
+// setLocked stores one option under its current name. d.mu must be held.
+func (d *databaseImpl) setLocked(key, value string) {
+	key, _ = canonicalOption(key)
+	d.opts[key] = value
 }
 
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
@@ -83,7 +110,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 			f, err := os.OpenFile(cfg.traceFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
 				conn.Close()
-				return nil, errStatus(adbc.StatusInvalidArgument, "db2: open trace file: %v", err)
+				return nil, errStatus(adbc.StatusInvalidArgument, "open trace file: %v", err)
 			}
 			w, closer = f, f
 		}
@@ -95,18 +122,53 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		}
 		conn.TraceHex = cfg.traceHex
 		conn.Trace("driver %s connected: server=%+v", driverVersion(), conn.Server)
-		if closer != nil {
-			c := &connectionImpl{db: d, conn: conn, alloc: d.alloc, cfg: cfg, autoCommit: true, traceCloser: closer}
-			return c, nil
-		}
+		c := &connectionImpl{db: d, conn: conn, alloc: d.alloc, cfg: cfg, autoCommit: true, traceCloser: closer}
+		return c.applyCurrentSchema(ctx)
 	}
-	return &connectionImpl{
+	c := &connectionImpl{
 		db:         d,
 		conn:       conn,
 		alloc:      d.alloc,
 		cfg:        cfg,
 		autoCommit: true,
-	}, nil
+	}
+	return c.applyCurrentSchema(ctx)
+}
+
+// applyCurrentSchema runs SET CURRENT SCHEMA for db2.session.current_schema
+// (or the URI's schema= parameter) on a new connection; on failure it closes
+// the connection. The name is used as given (quoted), like
+// adbc.connection.db_schema.
+func (c *connectionImpl) applyCurrentSchema(ctx context.Context) (adbc.Connection, error) {
+	schema := c.cfg.drda.CurrentSchema
+	if schema == "" {
+		return c, nil
+	}
+	if err := c.setCurrentSchema(ctx, schema); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// setCurrentSchema makes schema current (SET CURRENT SCHEMA, the name used
+// as given, quoted). Db2 accepts SET CURRENT SCHEMA for a schema that does
+// not exist (it is just a special register), so a misspelled name would go
+// unnoticed until the next unqualified statement; ADBC reports NOT_FOUND
+// instead. Running SET CURRENT SCHEMA as SQL still works for a schema that a
+// later CREATE will create implicitly.
+func (c *connectionImpl) setCurrentSchema(ctx context.Context, schema string) error {
+	_, rows, err := c.queryAll(ctx, "SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = "+sqlString(schema))
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return errStatus(adbc.StatusNotFound, "schema %q does not exist", schema)
+	}
+	if _, err := c.conn.ExecImmediate(ctx, "SET CURRENT SCHEMA "+quoteIdent(schema)); err != nil {
+		return fromDRDAError(err)
+	}
+	return c.autoCommitIfNeeded(ctx)
 }
 
 func (d *databaseImpl) Close() error { return nil }
@@ -185,7 +247,9 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 	return fromDRDAError(c.conn.Rollback(ctx))
 }
 
-func (c *connectionImpl) SetOption(key, value string) error {
+func (c *connectionImpl) SetOption(name, value string) error {
+	// name is what the caller wrote; errors name it.
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		switch value {
@@ -204,24 +268,7 @@ func (c *connectionImpl) SetOption(key, value string) error {
 		}
 		return nil
 	case adbc.OptionKeyCurrentDbSchema:
-		// Db2 accepts SET CURRENT SCHEMA for a schema that does not exist
-		// (it is just a special register), so a misspelled name would go
-		// unnoticed until the next unqualified statement. ADBC reports
-		// NOT_FOUND instead. Running SET CURRENT SCHEMA as SQL still works
-		// for a schema that a later CREATE will create implicitly.
-		_, rows, err := c.queryAll(context.Background(),
-			"SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = "+sqlString(value))
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return errStatus(adbc.StatusNotFound, "db2: schema %q does not exist", value)
-		}
-		_, err = c.conn.ExecImmediate(context.Background(), "SET CURRENT SCHEMA "+quoteIdent(value))
-		if err != nil {
-			return fromDRDAError(err)
-		}
-		return c.autoCommitIfNeeded(context.Background())
+		return c.setCurrentSchema(context.Background(), value)
 	case adbc.OptionKeyIsolationLevel:
 		var iso string
 		switch value {
@@ -248,12 +295,13 @@ func (c *connectionImpl) SetOption(key, value string) error {
 			// the option so generic tooling works, without enforcement.
 			return nil
 		}
-		return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 	}
-	return errStatus(adbc.StatusNotImplemented, "unknown connection option %q", key)
+	return errStatus(adbc.StatusNotImplemented, "unknown connection option %q", name)
 }
 
-func (c *connectionImpl) GetOption(key string) (string, error) {
+func (c *connectionImpl) GetOption(name string) (string, error) {
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		if c.autoCommit {
@@ -271,7 +319,7 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 	case OptionSecurityMechanismActive:
 		return strconv.Itoa(int(c.conn.SecurityMechanism())), nil
 	}
-	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", key)
+	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", name)
 }
 
 func (c *connectionImpl) ReadPartition(context.Context, []byte) (array.RecordReader, error) {
@@ -332,7 +380,10 @@ func (s *statementImpl) clearBound() {
 
 func (s *statementImpl) SetSqlQuery(sql string) error { s.sql = addDummyFrom(sql); return nil }
 
-func (s *statementImpl) SetOption(key, value string) error {
+func (s *statementImpl) SetOption(name, value string) error {
+	// name is what the caller wrote; errors name it. Each call is validated
+	// and the last write wins, whichever name it uses.
+	key, _ := canonicalOption(name)
 	switch key {
 	case adbc.OptionKeyIngestTargetTable:
 		s.targetTable = value
@@ -353,22 +404,22 @@ func (s *statementImpl) SetOption(key, value string) error {
 		case adbc.OptionValueDisabled:
 			s.ingestTemporary = false
 		default:
-			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 		}
 	case OptionIngestVarcharLength:
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {
-			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 		}
 		s.ingestVarcharLength = n
 	case OptionIngestBatchRows:
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {
-			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, name)
 		}
 		s.ingestBatchRows = n
 	default:
-		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", key)
+		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", name)
 	}
 	return nil
 }
@@ -417,7 +468,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	if len(q.Columns) != len(q.Fields) {
 		_ = q.Close(ctx)
 		return nil, -1, errStatus(adbc.StatusInternal,
-			"db2: result descriptor mismatch: SQLDARD describes %d columns but QRYDSC has %d fields (please report with adbc.db2.trace=hex)",
+			"result descriptor mismatch: SQLDARD describes %d columns but QRYDSC has %d fields (please report with db2.trace=hex)",
 			len(q.Columns), len(q.Fields))
 	}
 	return newStreamingRecordReader(ctx, s.conn, q, s.conn.cfg.batchSize), -1, nil

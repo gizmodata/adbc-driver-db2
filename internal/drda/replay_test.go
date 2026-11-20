@@ -10,7 +10,7 @@ import (
 )
 
 // TestReplayCapturedQuery decodes QRYDSC/QRYDTA payloads captured from a
-// real server (hex dumps from adbc.db2.trace=hex) when REPLAY_DIR is set.
+// real server (hex dumps from db2.trace=hex) when REPLAY_DIR is set.
 func TestReplayCapturedQuery(t *testing.T) {
 	dir := os.Getenv("REPLAY_DIR")
 	if dir == "" {

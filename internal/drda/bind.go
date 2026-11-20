@@ -142,11 +142,11 @@ type PackageError struct {
 func (e *PackageError) Error() string {
 	pkg := e.Collection + "." + e.ID
 	if e.BindErr == nil {
-		return fmt.Sprintf("%v (package %s does not exist and auto-bind is disabled by adbc.db2.no_auto_bind)", e.Err, pkg)
+		return fmt.Sprintf("%v (package %s does not exist and auto-bind is disabled by db2.package.no_auto_bind)", e.Err, pkg)
 	}
 	return fmt.Sprintf("%v (package %s does not exist and the driver could not create it: %v; "+
 		"creating it needs authority to bind packages in collection %s — on Db2 for i the %s library must exist, e.g. CRTLIB %s. "+
-		"Have a DBA create it once, or set adbc.db2.package to COLLECTION.%s naming a collection you may create packages in)",
+		"Have a DBA create it once, or set db2.package to COLLECTION.%s naming a collection you may create packages in)",
 		e.Err, pkg, e.BindErr, e.Collection, e.Collection, e.Collection, e.ID)
 }
 

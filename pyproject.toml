@@ -56,12 +56,15 @@ test = [
     "pandas >=3.1.1; python_version >= '3.11'",
     "pandas >=2.3.3; python_version < '3.11'",
     "pytest >=9.2.0",
-    "duckdb >=2.0.0; python_version >= '3.11'",
+    # Not 2.0.1 (released 2026-11-20): Query.Farm has no adbc_scanner build for it yet (404), which
+    # test_adbc_scanner.py installs. Drop the exclusion once
+    # https://duckdb-extensions.query.farm/v2.0.1/linux_amd64/adbc_scanner.duckdb_extension.gz answers.
+    "duckdb >=2.0.0,!=2.0.1; python_version >= '3.11'",
     "duckdb >=1.5.6; python_version < '3.11'",
 ]
 # Db2 -> Hardcharger integration tests (https://gizmodata.com/hardcharger): the
 # server package and its ADBC client. The client needs Python 3.11 or later.
-hardcharger = ["hardcharger[adbc] >=2.10.0; python_version >= '3.11'"]
+hardcharger = ["hardcharger[adbc] >=2.13.3; python_version >= '3.11'"]
 
 [project.urls]
 homepage = "https://github.com/gizmodata/adbc-driver-db2"

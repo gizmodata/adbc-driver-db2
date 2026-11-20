@@ -23,7 +23,7 @@ on:
 # floor the wheels' manylinux2014 tag promises.
 
 env:
-  GO_VERSION: '1.27.3'
+  GO_VERSION: '1.27.4'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -301,7 +301,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         if: ${{ matrix.goos == 'linux' }}
         with:
-          version: 0.14.1
+          version: 0.17.1
       - name: Build c-shared driver library
         shell: bash
         env:

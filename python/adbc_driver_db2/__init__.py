@@ -22,55 +22,72 @@ __all__ = [
 class DatabaseOptions(enum.Enum):
     """Database options specific to the Db2 driver.
 
-    All of these can alternatively be given as ``db2://`` URI query
+    The names follow the ADBC driver style guide
+    (https://adbc-drivers.org/building-drivers/style-guide.html): a ``db2.``
+    prefix, query behaviour under ``db2.query.*``. The pre-0.3.0
+    ``adbc.db2.*`` names still work, with a one-time deprecation warning on
+    stderr. Most of these can also be given as ``db2://`` URI query
     parameters (``?tls=true&schema=SALES``).
     """
 
     #: Server host name (alternative to the URI host).
-    HOST = "adbc.db2.host"
+    HOST = "db2.host"
     #: TCP port (default 50000, or 50001 with TLS).
-    PORT = "adbc.db2.port"
+    PORT = "db2.port"
     #: Database (RDB) name, e.g. ``"SAMPLE"``.
-    DATABASE = "adbc.db2.database"
+    DATABASE = "db2.database"
     #: ``"true"`` to wrap the connection in TLS (required by Db2 on Cloud).
-    TLS = "adbc.db2.tls"
+    TLS = "db2.tls"
     #: Path to a PEM CA certificate bundle for verifying the server.
-    TLS_CA_CERT = "adbc.db2.tls.ca_cert"
+    TLS_CA_CERT = "db2.tls.ca_cert"
     #: ``"true"`` to skip server certificate verification.
-    TLS_SKIP_VERIFY = "adbc.db2.tls.skip_verify"
+    TLS_SKIP_VERIFY = "db2.tls.skip_verify"
     #: DRDA security mechanism: ``"9"`` (encrypted user id + password,
     #: default when the server supports it), ``"3"`` (cleartext password),
-    #: ``"4"`` (user id only).
-    SECURITY_MECHANISM = "adbc.db2.security_mechanism"
+    #: ``"4"`` (user id only). An explicit setting fails closed.
+    SECURITY_MECHANISM = "db2.auth.security_mechanism"
     #: Schema to make current (``SET CURRENT SCHEMA``) after connecting.
-    CURRENT_SCHEMA = "adbc.db2.current_schema"
-    #: DRDA query block size in bytes (default 1 MiB).
-    QUERY_BLOCK_SIZE = "adbc.db2.query_block_size"
-    #: Connect timeout: seconds, or a Go duration such as ``"1.5s"``.
-    CONNECT_TIMEOUT = "adbc.db2.connect_timeout"
+    CURRENT_SCHEMA = "db2.session.current_schema"
     #: Application name reported to the server.
-    APPLICATION_NAME = "adbc.db2.application_name"
-    #: Maximum rows per Arrow record batch (default 65536).
-    BATCH_SIZE = "adbc.db2.batch_size"
-    #: Approximate maximum bytes per Arrow record batch (default 0 = only
-    #: ``batch_size`` applies). Useful for wide rows.
-    BATCH_BYTES = "adbc.db2.batch_bytes"
-    #: ``"true"`` to log DRDA traffic to stderr.
-    TRACE = "adbc.db2.trace"
+    APPLICATION_NAME = "db2.session.application_name"
+    #: Connect timeout in seconds (default 30); a Go duration such as
+    #: ``"1.5s"`` also works.
+    CONNECT_TIMEOUT = "db2.connect_timeout_seconds"
+    #: DRDA query block size in bytes (default 1 MiB).
+    QUERY_BLOCK_SIZE = "db2.query.block_size"
+    #: Maximum rows per Arrow record batch of a result (default 65536).
+    BATCH_SIZE = "db2.query.batch_rows"
+    #: Approximate maximum bytes per Arrow record batch (default 8 MiB,
+    #: under Flight SQL's 16 MiB gRPC cap; ``"0"`` = only the row cap
+    #: applies). Useful for wide rows.
+    BATCH_BYTES = "db2.query.batch_bytes"
+    #: ``"true"`` to log DRDA traffic to stderr; ``"hex"`` adds payload dumps.
+    TRACE = "db2.trace"
+    #: Write the DRDA trace to this file (appended) instead of stderr.
+    TRACE_FILE = "db2.trace.file"
+    #: Dynamic-SQL package as ``COLLECTION.PKGID`` (default
+    #: ``NULLID.SYSSH200``), bound automatically when missing.
+    PACKAGE = "db2.package"
+    #: ``"true"`` to never bind a missing package automatically.
+    NO_AUTO_BIND = "db2.package.no_auto_bind"
 
 
 class ConnectionOptions(enum.Enum):
     """Connection options specific to the Db2 driver."""
 
-    #: Reserved for future use.
-    _RESERVED = "adbc.db2.connection.reserved"
+    #: Read-only: the DRDA security mechanism negotiated for the session,
+    #: e.g. ``"9"`` or ``"3"``.
+    SECURITY_MECHANISM_ACTIVE = "db2.auth.security_mechanism_active"
 
 
 class StatementOptions(enum.Enum):
-    """Statement options specific to the Db2 driver."""
+    """Statement options specific to the Db2 driver (bulk ingest)."""
 
-    #: Reserved for future use.
-    _RESERVED = "adbc.db2.statement.reserved"
+    #: Length of the ``VARCHAR``/``VARBINARY`` columns bulk ingest creates
+    #: (default: sized from the first batch).
+    INGEST_VARCHAR_LENGTH = "db2.ingest.varchar_length"
+    #: Rows pipelined per DRDA round trip during bulk ingest (default 1000).
+    INGEST_BATCH_ROWS = "db2.ingest.batch_rows"
 
 
 @functools.lru_cache(maxsize=1)

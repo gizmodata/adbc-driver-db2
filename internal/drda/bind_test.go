@@ -25,7 +25,7 @@ func TestAutoBindReportsBindFailure(t *testing.T) {
 	require.ErrorContains(t, err, "SQLCODE=-805")
 	require.ErrorContains(t, err, "could not create it: SQLCODE=-204")
 	require.ErrorContains(t, err, "CRTLIB NULLID")
-	require.ErrorContains(t, err, "adbc.db2.package")
+	require.ErrorContains(t, err, "db2.package")
 	var ca *SQLCA
 	require.ErrorAs(t, err, &ca)
 	require.Equal(t, int32(-805), ca.SQLCode)

@@ -4,11 +4,24 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 
 	"github.com/gizmodata/adbc-driver-db2/internal/drda"
 )
+
+// driverPrefix starts every error message the driver returns, the format
+// the ADBC Driver Foundry style guide asks for: "[<driver slug>] message".
+const driverPrefix = "[db2] "
+
+// driverMessage prefixes msg with driverPrefix (once).
+func driverMessage(msg string) string {
+	if strings.HasPrefix(msg, driverPrefix) {
+		return msg
+	}
+	return driverPrefix + msg
+}
 
 // fromDRDAError maps DRDA-layer errors onto ADBC statuses, preserving
 // SQLSTATE / SQLCODE where Db2 supplied them.
@@ -18,38 +31,42 @@ func fromDRDAError(err error) error {
 	}
 	var ae adbc.Error
 	if errors.As(err, &ae) {
-		return err
+		if strings.HasPrefix(ae.Msg, driverPrefix) {
+			return err
+		}
+		ae.Msg = driverMessage(ae.Msg)
+		return ae
 	}
 	var ca *drda.SQLCA
 	if errors.As(err, &ca) {
 		// err.Error(), not ca.Error(): keep context wrapped around the
 		// SQLCA (e.g. why a missing package could not be bound).
-		e := adbc.Error{Code: statusForSQLCA(ca), Msg: "db2: " + err.Error(), VendorCode: ca.SQLCode}
+		e := adbc.Error{Code: statusForSQLCA(ca), Msg: driverMessage(err.Error()), VendorCode: ca.SQLCode}
 		copy(e.SqlState[:], ca.SQLState)
 		return e
 	}
 	var auth *drda.AuthError
 	if errors.As(err, &auth) {
-		return adbc.Error{Code: adbc.StatusUnauthenticated, Msg: auth.Error()}
+		return adbc.Error{Code: adbc.StatusUnauthenticated, Msg: driverMessage(auth.Error())}
 	}
 	var pe *drda.ProtocolError
 	if errors.As(err, &pe) {
-		return adbc.Error{Code: adbc.StatusInternal, Msg: pe.Error()}
+		return adbc.Error{Code: adbc.StatusInternal, Msg: driverMessage(pe.Error())}
 	}
 	if errors.Is(err, context.Canceled) {
-		return adbc.Error{Code: adbc.StatusCancelled, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusCancelled, Msg: driverMessage(err.Error())}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return adbc.Error{Code: adbc.StatusTimeout, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusTimeout, Msg: driverMessage(err.Error())}
 	}
 	var ne net.Error
 	if errors.As(err, &ne) {
 		if ne.Timeout() {
-			return adbc.Error{Code: adbc.StatusTimeout, Msg: err.Error()}
+			return adbc.Error{Code: adbc.StatusTimeout, Msg: driverMessage(err.Error())}
 		}
-		return adbc.Error{Code: adbc.StatusIO, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusIO, Msg: driverMessage(err.Error())}
 	}
-	return adbc.Error{Code: adbc.StatusIO, Msg: err.Error()}
+	return adbc.Error{Code: adbc.StatusIO, Msg: driverMessage(err.Error())}
 }
 
 func statusForSQLCA(ca *drda.SQLCA) adbc.Status {

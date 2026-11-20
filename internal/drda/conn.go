@@ -343,7 +343,7 @@ func (c *Conn) handshake(ctx context.Context) error {
 	// configured mechanism must fail closed, never be silently downgraded
 	// (e.g. from encrypted (9) to a cleartext password (3)).
 	if serverSecMec != secmec && c.cfg.SecurityMechanism != 0 {
-		return fmt.Errorf("drda: the server does not accept security mechanism %d (it offers %d); refusing to downgrade an explicitly configured adbc.db2.security_mechanism — remove the option to negotiate automatically", secmec, serverSecMec)
+		return fmt.Errorf("drda: the server does not accept security mechanism %d (it offers %d); refusing to downgrade an explicitly configured db2.auth.security_mechanism — remove the option to negotiate automatically", secmec, serverSecMec)
 	}
 	if serverSecMec != secmec {
 		c.trace("server requires SECMEC %d (we offered %d); renegotiating", serverSecMec, secmec)

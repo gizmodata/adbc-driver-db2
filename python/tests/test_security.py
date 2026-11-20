@@ -3,7 +3,7 @@
 The community Db2 container authenticates with the LUW default
 ``SRVCON_AUTH=SERVER``, which only accepts SECMEC 3 (user id + cleartext
 password) — that makes it the perfect stage for the fail-closed contract:
-an explicitly configured ``adbc.db2.security_mechanism`` must error when
+an explicitly configured ``db2.auth.security_mechanism`` must error when
 the server refuses it, never silently downgrade to a weaker mechanism.
 """
 
@@ -93,7 +93,7 @@ def test_explicit_encrypted_mechanism_never_sends_cleartext_password(db2_server)
     )
 
     error, wire = _run_via_proxy(
-        db2_server, db_kwargs={"adbc.db2.security_mechanism": "9"}
+        db2_server, db_kwargs={"db2.auth.security_mechanism": "9"}
     )
     assert error is not None, "explicit secmec=9 must fail closed against this server"
     assert "refusing to downgrade" in str(error)
@@ -108,7 +108,7 @@ def test_security_mechanism_introspection(db2_server):
     with db2.connect(
         uri=db2_server.uri, username=db2_server.user, password=db2_server.password
     ) as conn:
-        active = conn.adbc_connection.get_option(key="adbc.db2.security_mechanism_active")
+        active = conn.adbc_connection.get_option(key="db2.auth.security_mechanism_active")
         assert active in ("3", "9")
 
 
@@ -119,10 +119,10 @@ def test_explicit_accepted_mechanism_still_connects(db2_server):
         uri=db2_server.uri,
         username=db2_server.user,
         password=db2_server.password,
-        db_kwargs={"adbc.db2.security_mechanism": "3"},
+        db_kwargs={"db2.auth.security_mechanism": "3"},
     ) as conn, conn.cursor() as cur:
         assert (
-            conn.adbc_connection.get_option(key="adbc.db2.security_mechanism_active")
+            conn.adbc_connection.get_option(key="db2.auth.security_mechanism_active")
             == "3"
         )
         cur.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")

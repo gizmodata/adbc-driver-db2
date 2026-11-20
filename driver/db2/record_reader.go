@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -99,7 +100,7 @@ func (r *streamingRecordReader) Next() bool {
 	}
 	rec, err := recordFromRows(r.alloc, r.schema, rows)
 	if err != nil {
-		r.err = err
+		r.err = errStatus(adbc.StatusInternal, "could not convert rows to Arrow: %v", err)
 		return false
 	}
 	r.current = rec

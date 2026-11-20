@@ -262,3 +262,64 @@ func TestADBCBatchBytes(t *testing.T) {
 	require.EqualValues(t, 2000, rows)
 	require.Greater(t, batches, int64(20))
 }
+
+// db2.session.current_schema (and the URI's schema=, and the deprecated
+// adbc.db2.current_schema) makes the schema current on connect.
+func TestCurrentSchemaOptionOnConnect(t *testing.T) {
+	uri := testURI(t)
+	for name, opts := range map[string]map[string]string{
+		"option":            {OptionURI: uri, OptionCurrentSchema: "SYSCAT"},
+		"deprecated option": {OptionURI: uri, "adbc.db2.current_schema": "SYSCAT"},
+		"URI parameter":     {OptionURI: uri + "?schema=SYSCAT"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, err := NewDriver(memory.DefaultAllocator).NewDatabase(opts)
+			require.NoError(t, err)
+			cnxn, err := db.Open(context.Background())
+			require.NoError(t, err)
+			defer cnxn.Close()
+			got, err := cnxn.(*connectionImpl).GetOption(adbc.OptionKeyCurrentDbSchema)
+			require.NoError(t, err)
+			require.Equal(t, "SYSCAT", got)
+
+			// Unqualified names resolve in it.
+			stmt, err := cnxn.NewStatement()
+			require.NoError(t, err)
+			defer stmt.Close()
+			require.NoError(t, stmt.SetSqlQuery("SELECT COUNT(*) FROM TABLES"))
+			rr, _, err := stmt.ExecuteQuery(context.Background())
+			require.NoError(t, err)
+			readAll(t, rr)
+		})
+	}
+}
+
+// A schema given at connect must exist (the check adbc.connection.db_schema
+// makes): the connect fails with NOT_FOUND naming it, instead of leaving a
+// misspelled special register in place.
+func TestCurrentSchemaOptionMustExist(t *testing.T) {
+	uri := testURI(t)
+	for name, opts := range map[string]map[string]string{
+		"option":        {OptionURI: uri, OptionCurrentSchema: "NO_SUCH_SCHEMA_XYZ"},
+		"URI parameter": {OptionURI: uri + "?schema=NO_SUCH_SCHEMA_XYZ"},
+		// Quoted as given: a lower-case name is not folded to SYSCAT.
+		"case kept": {OptionURI: uri, OptionCurrentSchema: "syscat"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, err := NewDriver(memory.DefaultAllocator).NewDatabase(opts)
+			require.NoError(t, err)
+			cnxn, err := db.Open(context.Background())
+			if cnxn != nil {
+				cnxn.Close()
+			}
+			var ae adbc.Error
+			require.ErrorAs(t, err, &ae)
+			require.Equal(t, adbc.StatusNotFound, ae.Code)
+			want := opts[OptionCurrentSchema]
+			if want == "" {
+				want = "NO_SUCH_SCHEMA_XYZ"
+			}
+			require.Equal(t, fmt.Sprintf("[db2] schema %q does not exist", want), ae.Msg)
+		})
+	}
+}

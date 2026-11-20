@@ -242,6 +242,23 @@ def test_batch_bytes_default_is_flight_safe(db2_server):
     fits under Flight SQL's 16 MiB gRPC message cap even for wide rows;
     an explicit batch_bytes=0 restores unlimited batches."""
     with _connect(db2_server) as conn:
-        assert conn.adbc_connection.get_option(key="adbc.db2.batch_bytes") == "8388608"
-    with _connect(db2_server, db_kwargs={"adbc.db2.batch_bytes": "0"}) as conn:
-        assert conn.adbc_connection.get_option(key="adbc.db2.batch_bytes") == "0"
+        assert conn.adbc_connection.get_option(key="db2.query.batch_bytes") == "8388608"
+    with _connect(db2_server, db_kwargs={"db2.query.batch_bytes": "0"}) as conn:
+        assert conn.adbc_connection.get_option(key="db2.query.batch_bytes") == "0"
+
+
+def test_deprecated_option_name_still_works_and_warns_once(db2_server, capfd):
+    """A pre-0.3.0 ``adbc.db2.*`` key still sets the option through the C
+    library, GetOption answers under both names, and the driver writes one
+    deprecation line to stderr per old key per process, without the value."""
+    from adbc_driver_db2 import DatabaseOptions
+
+    old_key = "adbc.db2.batch_size"
+    for _ in range(2):
+        with _connect(db2_server, db_kwargs={old_key: "4321"}) as conn:
+            for key in (old_key, DatabaseOptions.BATCH_SIZE.value):
+                assert conn.adbc_connection.get_option(key=key) == "4321"
+    err = capfd.readouterr().err
+    line = '[db2] option "adbc.db2.batch_size" is deprecated; use "db2.query.batch_rows"'
+    assert err.count(line) == 1, err
+    assert "4321" not in err
