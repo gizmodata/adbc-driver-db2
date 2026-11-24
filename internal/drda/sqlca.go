@@ -221,6 +221,19 @@ func parseSQLCAGRP(r *byteReader) *SQLCA {
 	return ca
 }
 
+// decodeUTF8Text decodes character column data whose CCSID is 1208 (or 0,
+// "assume UTF-8"). Column data is UTF-8 by the negotiated CCSID, never
+// EBCDIC, so valid UTF-8 is returned as is. Scoring it against an EBCDIC
+// reading (decodeMixed) misreads non-Latin text such as Chinese, whose
+// UTF-8 bytes look less "readable" than the EBCDIC letters they also
+// spell. Only bytes that are not valid UTF-8 fall back to decodeMixed.
+func decodeUTF8Text(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	return decodeMixed(b)
+}
+
 // decodeMixed decodes bytes that are UTF-8 in principle but, for a few
 // DDM-level fields (notably SQLERRMSG tokens), arrive in EBCDIC. EBCDIC
 // letters (0x81-0xE9) can accidentally form valid UTF-8, so when the

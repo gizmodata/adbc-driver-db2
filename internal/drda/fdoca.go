@@ -329,7 +329,7 @@ func (d *RowDecoder) decodeText(b []byte, f FieldDesc, fixed bool) string {
 			ccsid = uint16(f.CCSID)
 		}
 		if ccsid == 0 || ccsid == 1208 {
-			s = decodeMixed(b)
+			s = decodeUTF8Text(b)
 		} else {
 			s = ddm.DecodeCCSID(b, ccsid)
 		}
@@ -339,7 +339,7 @@ func (d *RowDecoder) decodeText(b []byte, f FieldDesc, fixed bool) string {
 			ccsid = uint16(f.CCSID)
 		}
 		if ccsid == 0 || ccsid == 1208 {
-			s = decodeMixed(b)
+			s = decodeUTF8Text(b)
 		} else {
 			s = ddm.DecodeCCSID(b, ccsid)
 		}
