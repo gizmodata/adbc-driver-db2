@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Non-Latin text in UTF-8 character columns came back as mojibake.** `CHAR`/`VARCHAR`/`LONG VARCHAR` and character `CLOB` data in a CCSID 1208 (or 0) column went through `decodeMixed`, which also tries an EBCDIC reading and keeps the more "readable" one; for Chinese, Japanese or Korean text the EBCDIC reading won (`中文` came back as `U½ÝWog`). Column data whose CCSID is 1208 is now returned as is when it is valid UTF-8; only bytes that are not valid UTF-8 still go through the old heuristic. DDM-level text (SQLCA message tokens) is unchanged ([#9](https://github.com/gizmodata/adbc-driver-db2/issues/9)).
+
 ## [0.3.0] - 2026-11-20
 
 Option names now follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html).

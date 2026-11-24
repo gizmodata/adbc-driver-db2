@@ -306,7 +306,7 @@ func (q *Query) resolveLOBs() {
 				}
 			}
 			if ref.IsChar {
-				row[i] = decodeMixed(data)
+				row[i] = decodeUTF8Text(data)
 			} else {
 				row[i] = cloneBytes(data)
 			}
