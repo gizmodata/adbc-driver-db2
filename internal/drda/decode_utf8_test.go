@@ -71,3 +71,21 @@ func TestResolveLOBsUTF8Clob(t *testing.T) {
 		t.Fatalf("resolved CLOB = %q, want %q", got, want)
 	}
 }
+
+// On an EBCDIC server a character LOB keeps decodeMixed's heuristic: "Hi"
+// in CCSID 37 (C8 89) is also valid UTF-8 (U+0209) and must not be
+// returned as that.
+func TestResolveLOBsEBCDICClob(t *testing.T) {
+	for _, ccsid := range []uint16{37, 500} {
+		q := &Query{
+			Fields:  []FieldDesc{{Type: TypeLobCSBCS | 1}},
+			pending: [][]Value{{LobRef{IsChar: true}}},
+			extdta:  [][]byte{{0x00, 0xC8, 0x89}},
+			decoder: RowDecoder{CCSIDSBC: ccsid, CCSIDDBC: 1200, CCSIDMBC: 1208},
+		}
+		q.resolveLOBs()
+		if got := q.pending[0][0]; got != "Hi" {
+			t.Fatalf("ccsid %d: resolved CLOB = %q, want %q", ccsid, got, "Hi")
+		}
+	}
+}

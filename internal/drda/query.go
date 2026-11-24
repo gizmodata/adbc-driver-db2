@@ -306,13 +306,41 @@ func (q *Query) resolveLOBs() {
 				}
 			}
 			if ref.IsChar {
-				row[i] = decodeUTF8Text(data)
+				row[i] = q.decodeCharLOB(data, f)
 			} else {
 				row[i] = cloneBytes(data)
 			}
 		}
 	}
 	q.extdta = q.extdta[:0]
+}
+
+// decodeCharLOB decodes a character LOB delivered in EXTDTA. Where the
+// column's single-byte CCSID is EBCDIC (Db2 for z/OS, Db2 for i) the bytes
+// may be EBCDIC, and short EBCDIC text can also be valid UTF-8 ("Hi" is
+// C8 89, U+0209), so those keep decodeMixed's heuristic. Everywhere else
+// character LOB data is UTF-8 and is returned as is when valid.
+func (q *Query) decodeCharLOB(data []byte, f FieldDesc) string {
+	ccsid := q.decoder.CCSIDSBC
+	if f.CCSID != 0 {
+		ccsid = uint16(f.CCSID)
+	}
+	if isEBCDICCCSID(ccsid) {
+		return decodeMixed(data)
+	}
+	return decodeUTF8Text(data)
+}
+
+// isEBCDICCCSID reports whether ddm.DecodeCCSID decodes ccsid with an
+// EBCDIC table.
+func isEBCDICCCSID(ccsid uint16) bool {
+	switch ccsid {
+	case 0, 1208, 1252, 819:
+		return false
+	case 37, 1140, 500, 1148:
+		return true
+	}
+	return ccsid >= 256 && ccsid < 1000
 }
 
 // Next returns the next batch of rows, fetching another block from the
